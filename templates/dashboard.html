@@ -1,8 +1,10 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>Dashboard</title>
 </head>
+
 <body>
 
     <h2>Welcome, {{ username }} 🚀</h2>
@@ -17,13 +19,23 @@
     <h3>Your Tasks</h3>
 
     {% for task in tasks %}
-        <p>
-            {{ task[1] }} - {{ task[2] }}
-            <a href="/delete-task/{{ task[0] }}">Delete</a>
-        </p>
+    <p>
+        {{ task[1] }} - {{ task[2] }}
+
+        {% if task[2] == "Pending" %}
+        <a href="/complete-task/{{ task[0] }}">
+            Mark Completed
+        </a>
+        {% endif %}
+
+        <a href="/delete-task/{{ task[0] }}">
+            Delete
+        </a>
+    </p>
     {% else %}
-        <p>No tasks yet.</p>
+    <p>No tasks yet.</p>
     {% endfor %}
 
 </body>
+
 </html>

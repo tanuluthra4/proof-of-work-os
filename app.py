@@ -167,6 +167,24 @@ def delete_task(task_id):
 
     return redirect('/dashboard')
 
+@app.route('/complete-task/<int:task_id>')
+def complete_task(task_id):
+    if 'user' not in session:
+        return redirect('/login')
+
+    conn = sqlite3.connect("database/users.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE tasks SET status='Completed' WHERE id=?",
+        (task_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect('/dashboard')
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True)
