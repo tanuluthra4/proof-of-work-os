@@ -13,12 +13,21 @@
         <div class="navbar">
             <div>
                 <h1>Welcome, {{ username }} 🚀</h1>
-                <h3>Execution Score: {{ score }}</h3>
+                <div class="score-box">
+                    Execution Score: {{ score }}
+                </div>
             </div>
 
             <div>
-                <a href="/add-task" class="logout-btn">Add Task</a>
-                <a href="/logout" class="logout-btn">Logout</a>
+                <div class="task-actions">
+                    <a href="/add-task" class="action-btn dark-btn">
+                        + Add Task
+                    </a>
+
+                    <a href="/logout" class="action-btn light-btn">
+                        Logout
+                    </a>
+                </div>
             </div>
         </div>
 
@@ -26,22 +35,36 @@
             <h2>Your Tasks</h2>
 
             {% if tasks %}
-            {% for task in tasks %}
-            <div class="task-box">
-                <h3>{{ task[1] }}</h3>
-                <p>Status: <strong>{{ task[2] }}</strong></p>
+            <div class="task-grid">
 
-                {% if task[2] == "Pending" %}
-                <a href="/complete-task/{{ task[0] }}" class="btn-small complete-btn">
-                    Mark Completed
-                </a>
-                {% endif %}
+                {% for task in tasks %}
+                <div class="task-box">
+                    <h3 style="margin-bottom: 10px;">
+                        {{ task[1] }}
+                    </h3>
 
-                <a href="/delete-task/{{ task[0] }}" class="btn-small delete-btn">
-                    Delete
-                </a>
+                    <p>
+                        Status:
+                        <strong>{{ task[2] }}</strong>
+                    </p>
+
+                    <div class="task-actions">
+
+                        {% if task[2] == "Pending" %}
+                        <a href="/complete-task/{{ task[0] }}" class="btn-small complete-btn">
+                            Mark Completed
+                        </a>
+                        {% endif %}
+
+                        <a href="/delete-task/{{ task[0] }}" class="btn-small delete-btn">
+                            Delete
+                        </a>
+
+                    </div>
+                </div>
+                {% endfor %}
+
             </div>
-            {% endfor %}
             {% else %}
             <p>No tasks yet. Start building your execution streak.</p>
             {% endif %}
