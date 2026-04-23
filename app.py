@@ -1,8 +1,9 @@
 from flask import Flask, render_template, request, redirect, session
+from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
+app.secret_key = "pow_os_super_secure_key_2026"
 
 
 def init_db():
@@ -41,7 +42,7 @@ def signup():
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
-        password = request.form['password']
+        password = generate_password_hash(request.form['password'])
 
         conn = sqlite3.connect("database/users.db")
         cursor = conn.cursor()
@@ -72,14 +73,14 @@ def login():
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT * FROM users WHERE email=? AND password=?",
-            (email, password)
+            "SELECT * FROM users WHERE email=?",
+            (email,)
         )
 
         user = cursor.fetchone()
         conn.close()
 
-        if user:
+        if user and check_password_hash(user[3], password):
             session['user'] = user[1]
             session['email'] = user[2]
             return redirect('/dashboard')
