@@ -4,8 +4,26 @@
     <title>Dashboard</title>
 </head>
 <body>
+
     <h2>Welcome, {{ username }} 🚀</h2>
 
+    <h3>Execution Score: {{ score }}</h3>
+
+    <a href="/add-task">Add Task</a> |
     <a href="/logout">Logout</a>
+
+    <hr>
+
+    <h3>Your Tasks</h3>
+
+    {% for task in tasks %}
+        <p>
+            {{ task[1] }} - {{ task[2] }}
+            <a href="/delete-task/{{ task[0] }}">Delete</a>
+        </p>
+    {% else %}
+        <p>No tasks yet.</p>
+    {% endfor %}
+
 </body>
 </html>
