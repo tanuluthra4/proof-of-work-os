@@ -12,6 +12,12 @@
         <div class="card auth-box">
             <h2>Create Your Account</h2>
 
+            {% if error %}
+            <p style="color: red; margin-bottom: 15px;">
+                {{ error }}
+            </p>
+            {% endif %}
+
             <form method="POST">
                 <input type="text" name="username" placeholder="Enter Username" required>
 

@@ -5,7 +5,6 @@ import sqlite3
 app = Flask(__name__)
 app.secret_key = "pow_os_super_secure_key_2026"
 
-
 def init_db():
     conn = sqlite3.connect("database/users.db")
     cursor = conn.cursor()
@@ -31,14 +30,14 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 @app.route('/')
 def home():
     return redirect('/login')
 
-
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
+    error = None
+
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
@@ -52,19 +51,26 @@ def signup():
                 "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
                 (username, email, password)
             )
+
             conn.commit()
-            return redirect('/login')
+
+            session['user'] = username
+            session['email'] = email
+
+            return redirect('/dashboard')
+
         except:
-            return "Email already exists!"
+            error = "Email already exists"
 
         finally:
             conn.close()
 
-    return render_template('signup.html')
-
+    return render_template('signup.html', error=error)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    error = None
+
     if request.method == 'POST':
         email = request.form['email']
         password = request.form['password']
@@ -85,10 +91,9 @@ def login():
             session['email'] = user[2]
             return redirect('/dashboard')
         else:
-            return "Invalid credentials!"
+            error = "Invalid email or password"
 
-    return render_template('login.html')
-
+    return render_template('login.html', error=error)
 
 @app.route('/dashboard')
 def dashboard():
@@ -122,7 +127,6 @@ def dashboard():
         score=score
     )
 
-
 @app.route('/logout')
 def logout():
     session.pop('user', None)
@@ -152,7 +156,6 @@ def add_task():
         return redirect('/dashboard')
 
     return render_template('add_task.html')
-
 
 @app.route('/delete-task/<int:task_id>')
 def delete_task(task_id):
