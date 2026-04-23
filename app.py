@@ -6,8 +6,9 @@ import sqlite3
 app = Flask(__name__)
 app.secret_key = "pow_os_super_secure_key_2026"
 
+DB_PATH = os.path.join(os.getcwd(), "users.db")
+
 def init_db():
-    DB_PATH = os.path.join(os.getcwd(), "users.db")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -45,7 +46,7 @@ def signup():
         email = request.form['email']
         password = generate_password_hash(request.form['password'])
 
-        conn = sqlite3.connect("database/users.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         try:
@@ -77,7 +78,7 @@ def login():
         email = request.form['email']
         password = request.form['password']
 
-        conn = sqlite3.connect("database/users.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         cursor.execute(
@@ -104,7 +105,7 @@ def dashboard():
 
     user_email = session.get('email')
 
-    conn = sqlite3.connect("database/users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute(
@@ -144,7 +145,7 @@ def add_task():
         status = request.form['status']
         user_email = session.get('email')
 
-        conn = sqlite3.connect("database/users.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         cursor.execute(
@@ -164,7 +165,7 @@ def delete_task(task_id):
     if 'user' not in session:
         return redirect('/login')
 
-    conn = sqlite3.connect("database/users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute("DELETE FROM tasks WHERE id=?", (task_id,))
@@ -178,7 +179,7 @@ def complete_task(task_id):
     if 'user' not in session:
         return redirect('/login')
 
-    conn = sqlite3.connect("database/users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute(
@@ -191,6 +192,7 @@ def complete_task(task_id):
 
     return redirect('/dashboard')
 
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     app.run(host='0.0.0.0', port=5000)
