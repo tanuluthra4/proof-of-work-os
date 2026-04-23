@@ -1,41 +1,55 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-    <title>Dashboard</title>
+    <title>Dashboard | POW-OS</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 
 <body>
 
-    <h2>Welcome, {{ username }} 🚀</h2>
+    <div class="container">
 
-    <h3>Execution Score: {{ score }}</h3>
+        <div class="navbar">
+            <div>
+                <h1>Welcome, {{ username }} 🚀</h1>
+                <h3>Execution Score: {{ score }}</h3>
+            </div>
 
-    <a href="/add-task">Add Task</a> |
-    <a href="/logout">Logout</a>
+            <div>
+                <a href="/add-task" class="logout-btn">Add Task</a>
+                <a href="/logout" class="logout-btn">Logout</a>
+            </div>
+        </div>
 
-    <hr>
+        <div class="card">
+            <h2>Your Tasks</h2>
 
-    <h3>Your Tasks</h3>
+            {% if tasks %}
+            {% for task in tasks %}
+            <div class="task-box">
+                <h3>{{ task[1] }}</h3>
+                <p>Status: <strong>{{ task[2] }}</strong></p>
 
-    {% for task in tasks %}
-    <p>
-        {{ task[1] }} - {{ task[2] }}
+                {% if task[2] == "Pending" %}
+                <a href="/complete-task/{{ task[0] }}" class="btn-small complete-btn">
+                    Mark Completed
+                </a>
+                {% endif %}
 
-        {% if task[2] == "Pending" %}
-        <a href="/complete-task/{{ task[0] }}">
-            Mark Completed
-        </a>
-        {% endif %}
+                <a href="/delete-task/{{ task[0] }}" class="btn-small delete-btn">
+                    Delete
+                </a>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p>No tasks yet. Start building your execution streak.</p>
+            {% endif %}
+        </div>
 
-        <a href="/delete-task/{{ task[0] }}">
-            Delete
-        </a>
-    </p>
-    {% else %}
-    <p>No tasks yet.</p>
-    {% endfor %}
+    </div>
 
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 
 </html>

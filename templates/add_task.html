@@ -1,25 +1,35 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <title>Add Task</title>
+    <title>Add Task | POW-OS</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
+
 <body>
 
-    <h2>Add New Task</h2>
+    <div class="container">
+        <div class="card auth-box">
+            <h2>Add New Task</h2>
 
-    <form method="POST">
-        <input type="text" name="title" placeholder="Task Title" required><br><br>
+            <form method="POST">
+                <input type="text" name="title" placeholder="Task Title" required>
 
-        <select name="status" required>
-            <option value="Pending">Pending</option>
-            <option value="Completed">Completed</option>
-        </select><br><br>
+                <select name="status" required>
+                    <option value="Pending">Pending</option>
+                    <option value="Completed">Completed</option>
+                </select>
 
-        <button type="submit">Add Task</button>
-    </form>
+                <button type="submit">Add Task</button>
+            </form>
 
-    <br>
-    <a href="/dashboard">Back to Dashboard</a>
+            <p style="margin-top:20px;">
+                <a href="/dashboard">← Back to Dashboard</a>
+            </p>
+        </div>
+    </div>
 
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
+
 </html>
