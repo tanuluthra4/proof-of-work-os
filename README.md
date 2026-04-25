@@ -9,6 +9,13 @@ This project focuses on solving a real problem:
 
 ---
 
+## 🌐 Live Demo
+
+🔗 Live Application:  
+https://proof-of-work-os.onrender.com
+
+---
+
 ## 🎯 Problem Statement
 
 Most students say:
