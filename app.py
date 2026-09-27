@@ -1,41 +1,44 @@
 import os
-from flask import Flask, render_template, request, redirect, session
-from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 
-app = Flask(__name__)
-app.secret_key = "pow_os_super_secure_key_2026"
+from flask import Flask, render_template, request, redirect, session
+from werkzeug.security import generate_password_hash, check_password_hash
 
-DB_PATH = os.path.join(os.getcwd(), "users.db")
+from config import DB_PATH, SECRET_KEY
+
+
+app = Flask(__name__)
+app.secret_key = SECRET_KEY
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-    """)
+    conn = get_db_connection()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_email TEXT NOT NULL,
-            title TEXT NOT NULL,
-            status TEXT NOT NULL
-        )
-    """)
+    schema_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "database",
+        "schema.sql"
+    )
 
-    conn.commit()
+    with open(schema_path, "r", encoding="utf-8") as schema_file:
+        conn.executescript(schema_file.read())
+
     conn.close()
+
 
 @app.route('/')
 def home():
     return redirect('/login')
+
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
@@ -46,29 +49,45 @@ def signup():
         email = request.form['email']
         password = generate_password_hash(request.form['password'])
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_db_connection()
 
         try:
+            cursor = conn.cursor()
+
             cursor.execute(
-                "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+                """
+                INSERT INTO users (username, email, password)
+                VALUES (?, ?, ?)
+                """,
                 (username, email, password)
+            )
+
+            user_id = cursor.lastrowid
+
+            cursor.execute(
+                """
+                INSERT INTO profiles (user_id, full_name)
+                VALUES (?, ?)
+                """,
+                (user_id, username)
             )
 
             conn.commit()
 
             session['user'] = username
             session['email'] = email
+            session['user_id'] = user_id
 
             return redirect('/dashboard')
 
-        except:
+        except sqlite3.IntegrityError:
             error = "Email already exists"
 
         finally:
             conn.close()
 
     return render_template('signup.html', error=error)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -78,50 +97,59 @@ def login():
         email = request.form['email']
         password = request.form['password']
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_db_connection()
 
-        cursor.execute(
-            "SELECT * FROM users WHERE email=?",
+        user = conn.execute(
+            """
+            SELECT id, username, email, password
+            FROM users
+            WHERE email = ?
+            """,
             (email,)
-        )
+        ).fetchone()
 
-        user = cursor.fetchone()
         conn.close()
 
-        if user and check_password_hash(user[3], password):
-            session['user'] = user[1]
-            session['email'] = user[2]
+        if user and check_password_hash(user['password'], password):
+            session['user'] = user['username']
+            session['email'] = user['email']
+            session['user_id'] = user['id']
+
             return redirect('/dashboard')
-        else:
-            error = "Invalid email or password"
+
+        error = "Invalid email or password"
 
     return render_template('login.html', error=error)
 
+
 @app.route('/dashboard')
 def dashboard():
-    if 'user' not in session:
+    if 'user_id' not in session:
         return redirect('/login')
 
-    user_email = session.get('email')
+    user_id = session['user_id']
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_db_connection()
 
-    cursor.execute(
-        "SELECT id, title, status FROM tasks WHERE user_email=?",
-        (user_email,)
-    )
-    tasks = cursor.fetchall()
+    tasks = conn.execute(
+        """
+        SELECT id, title, status
+        FROM tasks
+        WHERE user_id = ?
+        ORDER BY id DESC
+        """,
+        (user_id,)
+    ).fetchall()
+
+    conn.close()
 
     score = 0
+
     for task in tasks:
-        if task[2] == "Completed":
+        if task['status'] == "Completed":
             score += 10
         else:
             score += 2
-
-    conn.close()
 
     return render_template(
         'dashboard.html',
@@ -130,27 +158,31 @@ def dashboard():
         score=score
     )
 
+
 @app.route('/logout')
 def logout():
-    session.pop('user', None)
+    session.clear()
     return redirect('/login')
+
 
 @app.route('/add-task', methods=['GET', 'POST'])
 def add_task():
-    if 'user' not in session:
+    if 'user_id' not in session:
         return redirect('/login')
 
     if request.method == 'POST':
         title = request.form['title']
         status = request.form['status']
-        user_email = session.get('email')
+        user_id = session['user_id']
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_db_connection()
 
-        cursor.execute(
-            "INSERT INTO tasks (user_email, title, status) VALUES (?, ?, ?)",
-            (user_email, title, status)
+        conn.execute(
+            """
+            INSERT INTO tasks (user_id, title, status)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, title, status)
         )
 
         conn.commit()
@@ -160,31 +192,20 @@ def add_task():
 
     return render_template('add_task.html')
 
+
 @app.route('/delete-task/<int:task_id>')
 def delete_task(task_id):
-    if 'user' not in session:
+    if 'user_id' not in session:
         return redirect('/login')
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_db_connection()
 
-    cursor.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-    conn.commit()
-    conn.close()
-
-    return redirect('/dashboard')
-
-@app.route('/complete-task/<int:task_id>')
-def complete_task(task_id):
-    if 'user' not in session:
-        return redirect('/login')
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "UPDATE tasks SET status='Completed' WHERE id=?",
-        (task_id,)
+    conn.execute(
+        """
+        DELETE FROM tasks
+        WHERE id = ? AND user_id = ?
+        """,
+        (task_id, session['user_id'])
     )
 
     conn.commit()
@@ -192,7 +213,32 @@ def complete_task(task_id):
 
     return redirect('/dashboard')
 
+
+@app.route('/complete-task/<int:task_id>')
+def complete_task(task_id):
+    if 'user_id' not in session:
+        return redirect('/login')
+
+    conn = get_db_connection()
+
+    conn.execute(
+        """
+        UPDATE tasks
+        SET status = 'Completed',
+            completed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+        """,
+        (task_id, session['user_id'])
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect('/dashboard')
+
+
 init_db()
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
