@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projects | POW-OS</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <div class="navbar">
+
+            <div>
+                <h1>Your Projects</h1>
+                <p>Build it. Execute it. Prove it.</p>
+            </div>
+
+            <div class="task-actions">
+
+                <a href="/projects/new" class="action-btn dark-btn">
+                    + New Project
+                </a>
+
+                <a href="/dashboard" class="action-btn light-btn">
+                    ← Back to Dashboard
+                </a>
+
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            {% if projects %}
+
+            <div class="task-grid">
+
+                {% for project in projects %}
+
+                <div class="task-box">
+
+                    <h3 style="margin-bottom: 10px;">
+                        {{ project['title'] }}
+                    </h3>
+
+                    {% if project['description'] %}
+                    <p>
+                        {{ project['description'] }}
+                    </p>
+                    {% endif %}
+
+                    <p>
+                        status:
+                        <strong>{{project['status']}}</strong>
+                    </p>
+
+                    <p>
+                        Tasks:
+                        <strong>{{ project['completed_tasks'] or 0}}</strong>
+                        /
+                        <strong>{{ project['task_count']}}</strong>
+                        completed
+                    </p>
+
+                    {% if project['github_url'] %}
+                    <p>
+                        <a href="{{ project['github_url'] }}" target="_blank">
+                            GitHub Repository
+                        </a>
+                    </p>
+                    {% endif %}
+
+                    {% if project['live_url'] %}
+                    <p>
+                        <a href="{{ project['live_url'] }}" target="_blank">
+                            Live Demo
+                        </a>
+                    </p>
+                    {% endif %}
+
+                </div>
+
+                {% endfor %}
+
+            </div>
+
+            {% else %}
+            <p>
+                No projects found. Create your first project and start
+                building your proof of work!
+            </p>
+            {% endif %}
+
+        </div>
+
+    </div>
+
+</body>
+
+</html>

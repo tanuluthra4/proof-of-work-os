@@ -5,18 +5,13 @@ from flask import Flask, render_template, request, redirect, session
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from config import DB_PATH, SECRET_KEY
+from database.db import get_db_connection
+from routes.projects import projects_bp
 
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
-
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
+app.register_blueprint(projects_bp)
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -170,19 +165,40 @@ def add_task():
     if 'user_id' not in session:
         return redirect('/login')
 
+    conn = get_db_connection()
+
+    projects = conn.execute(
+        """
+        SELECT id, title
+        FROM projects
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (session['user_id'],)
+    ).fetchall()
+
     if request.method == 'POST':
         title = request.form['title']
         status = request.form['status']
+        project_id = request.form.get('project_id') or None
         user_id = session['user_id']
-
-        conn = get_db_connection()
 
         conn.execute(
             """
-            INSERT INTO tasks (user_id, title, status)
-            VALUES (?, ?, ?)
+            INSERT INTO tasks (
+                user_id,
+                project_id,
+                title,
+                status
+            )
+            VALUES (?, ?, ?, ?)
             """,
-            (user_id, title, status)
+            (
+                user_id,
+                project_id,
+                title,
+                status
+            )
         )
 
         conn.commit()
@@ -190,7 +206,12 @@ def add_task():
 
         return redirect('/dashboard')
 
-    return render_template('add_task.html')
+    conn.close()
+
+    return render_template(
+        'add_task.html',
+        projects=projects
+    )
 
 
 @app.route('/delete-task/<int:task_id>')
