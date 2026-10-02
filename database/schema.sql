@@ -152,3 +152,50 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_user ON evidence(user_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_project ON evidence(project_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_evidence ON verifications(evidence_id);
+
+
+CREATE TABLE IF NOT EXISTS workflow_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    task_id INTEGER,
+    current_state TEXT NOT NULL DEFAULT 'CREATED',
+    result TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+
+    FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (task_id)
+        REFERENCES tasks(id)
+        ON DELETE CASCADE
+);
+
+
+CREATE TABLE IF NOT EXISTS state_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id INTEGER NOT NULL,
+    from_state TEXT NOT NULL,
+    event TEXT NOT NULL,
+    to_state TEXT NOT NULL,
+    condition_result TEXT DEFAULT 'PASS',
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (workflow_id)
+        REFERENCES workflow_instances(id)
+        ON DELETE CASCADE
+);
+
+
+CREATE INDEX IF NOT EXISTS idx_workflow_user
+ON workflow_instances(user_id);
+
+
+CREATE INDEX IF NOT EXISTS idx_workflow_task
+ON workflow_instances(task_id);
+
+
+CREATE INDEX IF NOT EXISTS idx_state_transitions_workflow
+ON state_transitions(workflow_id);
