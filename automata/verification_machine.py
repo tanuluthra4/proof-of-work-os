@@ -42,17 +42,20 @@ class VerificationMachine:
         """
 
         if not self.can_transition(event):
-            raise ValueError(f"Transition not allowed from state {self.current_state.value} with event {event.value}.")
-        
-        next_state = get_next_state(self.current_state, event)
+            raise ValueError(
+                f"Invalid transition: "
+                f"{self.current_state.value} + {event.value}"
+            )
 
         previous_state = self.current_state
+        next_state = get_next_state(self.current_state, event)
+
         self.current_state = next_state
 
         return {
-            "from state": previous_state.value,
+            "from_state": previous_state.value,
             "event": event.value,
-            "to state": self.current_state.value,
+            "to_state": next_state.value,
         }
 
     def is_verified(self) -> bool:

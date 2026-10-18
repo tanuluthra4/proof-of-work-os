@@ -7,11 +7,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from config import DB_PATH, SECRET_KEY
 from database.db import get_db_connection
 from routes.projects import projects_bp
+from routes.tasks import tasks_bp
 
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.register_blueprint(projects_bp)
+app.register_blueprint(tasks_bp)
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -126,15 +128,43 @@ def dashboard():
 
     conn = get_db_connection()
 
+    conn.execute("""
+        INSERT INTO workflow_instances (user_id, task_id, current_state)
+        SELECT t.user_id, t.id, 'CREATED'
+        FROM tasks t
+        WHERE t.user_id = ?
+        AND NOT EXISTS (
+            SELECT 1
+            FROM workflow_instances w
+            WHERE w.task_id = t.id
+                AND w.user_id = t.user_id
+        )
+    """, (user_id,))
+
+    conn.commit()
+
+    
     tasks = conn.execute(
         """
-        SELECT id, title, status
-        FROM tasks
-        WHERE user_id = ?
-        ORDER BY id DESC
+        SELECT
+            t.id,
+            t.title,
+            t.status,
+            (
+                SELECT w.current_state
+                FROM workflow_instances w
+                WHERE w.task_id = t.id
+                    AND w.user_id = t.user_id
+                ORDER BY w.id DESC
+                LIMIT 1
+            ) AS workflow_state
+        FROM tasks t
+        WHERE t.user_id = ?
+        ORDER BY t.id DESC
         """,
-        (user_id,)
+        (user_id,),
     ).fetchall()
+
 
     conn.close()
 
@@ -158,105 +188,6 @@ def dashboard():
 def logout():
     session.clear()
     return redirect('/login')
-
-
-@app.route('/add-task', methods=['GET', 'POST'])
-def add_task():
-    if 'user_id' not in session:
-        return redirect('/login')
-
-    conn = get_db_connection()
-
-    projects = conn.execute(
-        """
-        SELECT id, title
-        FROM projects
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        """,
-        (session['user_id'],)
-    ).fetchall()
-
-    if request.method == 'POST':
-        title = request.form['title']
-        status = request.form['status']
-        project_id = request.form.get('project_id') or None
-        user_id = session['user_id']
-
-        conn.execute(
-            """
-            INSERT INTO tasks (
-                user_id,
-                project_id,
-                title,
-                status
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                project_id,
-                title,
-                status
-            )
-        )
-
-        conn.commit()
-        conn.close()
-
-        return redirect('/dashboard')
-
-    conn.close()
-
-    return render_template(
-        'add_task.html',
-        projects=projects
-    )
-
-
-@app.route('/delete-task/<int:task_id>')
-def delete_task(task_id):
-    if 'user_id' not in session:
-        return redirect('/login')
-
-    conn = get_db_connection()
-
-    conn.execute(
-        """
-        DELETE FROM tasks
-        WHERE id = ? AND user_id = ?
-        """,
-        (task_id, session['user_id'])
-    )
-
-    conn.commit()
-    conn.close()
-
-    return redirect('/dashboard')
-
-
-@app.route('/complete-task/<int:task_id>')
-def complete_task(task_id):
-    if 'user_id' not in session:
-        return redirect('/login')
-
-    conn = get_db_connection()
-
-    conn.execute(
-        """
-        UPDATE tasks
-        SET status = 'Completed',
-            completed_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND user_id = ?
-        """,
-        (task_id, session['user_id'])
-    )
-
-    conn.commit()
-    conn.close()
-
-    return redirect('/dashboard')
-
 
 init_db()
 

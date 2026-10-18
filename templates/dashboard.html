@@ -3,7 +3,8 @@
 
 <head>
     <title>Dashboard | POW-OS</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 
 <body>
@@ -14,27 +15,24 @@
 
             <div>
                 <h1>Welcome, {{ username }} 🚀</h1>
+
                 <div class="score-box">
                     Execution Score: {{ score }}
                 </div>
             </div>
 
-            <div>
-                <div class="task-actions">
+            <div class="task-actions">
+                <a href="/projects" class="action-btn dark-btn">
+                    Projects
+                </a>
 
-                    <a href="/projects" class="action-btn dark-btn">
-                        Projects
-                    </a>
+                <a href="/add-task" class="action-btn dark-btn">
+                    + Add Task
+                </a>
 
-                    <a href="/add-task" class="action-btn dark-btn">
-                        + Add Task
-                    </a>
-
-                    <a href="/logout" class="action-btn light-btn">
-                        Logout
-                    </a>
-
-                </div>
+                <a href="/logout" class="action-btn light-btn">
+                    Logout
+                </a>
             </div>
 
         </div>
@@ -47,32 +45,63 @@
 
                 {% for task in tasks %}
                 <div class="task-box">
+
                     <h3 style="margin-bottom: 10px;">
-                        {{ task[1] }}
+                        {{ task['title'] }}
                     </h3>
 
                     <p>
-                        Status:
-                        <strong>{{ task[2] }}</strong>
+                        Task Status:
+                        <strong>{{ task['status'] }}</strong>
+                    </p>
+
+                    <p>
+                        Workflow State:
+                        <strong>
+                            {{ task['workflow_state'] or 'NOT_STARTED' }}
+                        </strong>
                     </p>
 
                     <div class="task-actions">
 
-                        {% if task[2] == "Pending" %}
-                        <a href="/complete-task/{{ task[0] }}" class="btn-small complete-btn">
+                        {% if task['workflow_state'] == 'CREATED' %}
+                        <form method="POST"
+                              action="{{ url_for('tasks.start_task_workflow', task_id=task['id']) }}">
+                            <button type="submit"
+                                    class="btn-small complete-btn">
+                                Start Workflow
+                            </button>
+                        </form>
+
+                        {% elif task['workflow_state'] == 'IN_PROGRESS' %}
+                        <form method="POST"
+                              action="{{ url_for('tasks.request_evidence', task_id=task['id']) }}">
+                            <button type="submit"
+                                    class="btn-small complete-btn">
+                                Request Evidence
+                            </button>
+                        </form>
+                        {% endif %}
+
+                        {% if task['status'] == 'Pending' %}
+                        <a href="/complete-task/{{ task['id'] }}"
+                           class="btn-small complete-btn">
                             Mark Completed
                         </a>
                         {% endif %}
 
-                        <a href="/delete-task/{{ task[0] }}" class="btn-small delete-btn">
+                        <a href="/delete-task/{{ task['id'] }}"
+                           class="btn-small delete-btn">
                             Delete
                         </a>
 
                     </div>
+
                 </div>
                 {% endfor %}
 
             </div>
+
             {% else %}
             <p>No tasks yet. Start building your execution streak.</p>
             {% endif %}
@@ -81,6 +110,7 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
 
+</body>
 </html>
+```
