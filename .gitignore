@@ -1,8 +1,10 @@
-# Local databases
 *.db
+*.db-wal
+*.db-shm
 venv/
 .venv/
 __pycache__/
 *.pyc
 .env
 .DS_Store
+.pytest_cache/

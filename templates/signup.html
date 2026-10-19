@@ -1,41 +1,24 @@
-<!DOCTYPE html>
-<html lang="en">
-
-<head>
-    <title>Signup | POW-OS</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-
-<body>
-
-    <div class="container">
-        <div class="card auth-box">
-            <h2>Create Your Account</h2>
-
-            {% if error %}
-            <p style="color: red; margin-bottom: 15px;">
-                {{ error }}
-            </p>
-            {% endif %}
-
-            <form method="POST">
-                <input type="text" name="username" placeholder="Enter Username" required>
-
-                <input type="email" name="email" placeholder="Enter Email" required>
-
-                <input type="password" name="password" placeholder="Enter Password" required>
-
-                <button type="submit">Signup</button>
-            </form>
-
-            <p style="margin-top:20px;">
-                Already have an account?
-                <a href="/login">Login</a>
-            </p>
-        </div>
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf %}
+{% block title %}Sign up{% endblock %}
+{% block body %}
+<main class="narrow">
+    <div class="auth-brand"><b>Proof<span style="color:var(--accent)">-of-Work</span> OS</b></div>
+    <div class="card">
+        <h2>Create your account</h2>
+        {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+        <form method="post">
+            {{ csrf() }}
+            <label for="username">Username</label>
+            <input id="username" type="text" name="username" required minlength="3" maxlength="30" autocomplete="username">
+            <label for="email">Email</label>
+            <input id="email" type="email" name="email" required autocomplete="email">
+            <label for="password">Password</label>
+            <input id="password" type="password" name="password" required minlength="8" autocomplete="new-password">
+            <p class="hint">At least 8 characters.</p>
+            <button type="submit" class="btn-primary btn-block">Sign up</button>
+        </form>
+        <p class="small muted" style="margin-top:16px">Already registered? <a href="{{ url_for('auth.login') }}">Log in</a></p>
     </div>
-
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
-
-</html>
+</main>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf %}
+{% block title %}{{ 'Edit task' if mode == 'edit' else 'New task' }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:640px;margin:0 auto">
+    <h2>{{ 'Edit task' if mode == 'edit' else 'New task' }}</h2>
+    <form method="post">
+        {{ csrf() }}
+        <label for="title">Title</label>
+        <input id="title" type="text" name="title" value="{{ task.get('title', '') }}" required maxlength="200">
+
+        <label for="description">Description</label>
+        <textarea id="description" name="description" maxlength="2000" placeholder="What skill or outcome should this task prove?">{{ task.get('description') or '' }}</textarea>
+
+        <label for="project_id">Project</label>
+        <select id="project_id" name="project_id">
+            <option value="">No project</option>
+            {% for project in projects %}
+            <option value="{{ project['id'] }}" {{ 'selected' if task.get('project_id') == project['id'] }}>{{ project['title'] }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="priority">Priority</label>
+        <select id="priority" name="priority">
+            {% for p in priorities %}
+            <option value="{{ p }}" {{ 'selected' if (task.get('priority') or 'medium') == p }}>{{ p|capitalize }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="due_date">Due date (optional)</label>
+        <input id="due_date" type="date" name="due_date" value="{{ task.get('due_date') or '' }}">
+
+        <div class="actions-row">
+            <button type="submit" class="btn-primary">{{ 'Save changes' if mode == 'edit' else 'Create task' }}</button>
+            <a class="btn btn-ghost" href="{{ url_for('tasks.task_detail', task_id=task['id']) if mode == 'edit' else url_for('main.dashboard') }}">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

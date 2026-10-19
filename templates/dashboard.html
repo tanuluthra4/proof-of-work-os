@@ -1,116 +1,68 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends 'base.html' %}
+{% from '_macros.html' import state_pill, post_button %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Welcome, {{ current_user['username'] }}</h1>
+        <p>Every skill claim needs evidence, and every state change is checked by the automaton.</p>
+    </div>
+    <div class="actions-row">
+        {% if current_user['role'] == 'reviewer' %}
+        <a href="{{ url_for('tasks.review_queue') }}" class="btn btn-ghost">Review queue{% if pending_reviews %} ({{ pending_reviews }}){% endif %}</a>
+        {% endif %}
+        <a href="{{ url_for('tasks.add_task') }}" class="btn btn-primary">+ New task</a>
+    </div>
+</div>
 
-<head>
-    <title>Dashboard | POW-OS</title>
-    <link rel="stylesheet"
-          href="{{ url_for('static', filename='css/style.css') }}">
-</head>
+<section class="stats" aria-label="Verification summary">
+    <div class="stat good"><b>{{ counts.verified }}</b><span>Verified proofs</span></div>
+    <div class="stat"><b>{{ counts.in_review }}</b><span>In review</span></div>
+    <div class="stat"><b>{{ counts.needs_action }}</b><span>Need your action</span></div>
+    <div class="stat"><b>{{ counts.rejected }}</b><span>Rejected</span></div>
+</section>
 
-<body>
-
-    <div class="container">
-
-        <div class="navbar">
-
-            <div>
-                <h1>Welcome, {{ username }} 🚀</h1>
-
-                <div class="score-box">
-                    Execution Score: {{ score }}
-                </div>
-            </div>
-
-            <div class="task-actions">
-                <a href="/projects" class="action-btn dark-btn">
-                    Projects
-                </a>
-
-                <a href="/add-task" class="action-btn dark-btn">
-                    + Add Task
-                </a>
-
-                <a href="/logout" class="action-btn light-btn">
-                    Logout
-                </a>
-            </div>
-
+{% if cards %}
+<div class="task-grid">
+    {% for card in cards %}
+    {% set task = card.task %}
+    <article class="task-card">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <h3><a href="{{ url_for('tasks.task_detail', task_id=task['id']) }}">{{ task['title'] }}</a></h3>
+            {{ state_pill(card.state, card.state_label) }}
         </div>
-
-        <div class="card">
-            <h2>Your Tasks</h2>
-
-            {% if tasks %}
-            <div class="task-grid">
-
-                {% for task in tasks %}
-                <div class="task-box">
-
-                    <h3 style="margin-bottom: 10px;">
-                        {{ task['title'] }}
-                    </h3>
-
-                    <p>
-                        Task Status:
-                        <strong>{{ task['status'] }}</strong>
-                    </p>
-
-                    <p>
-                        Workflow State:
-                        <strong>
-                            {{ task['workflow_state'] or 'NOT_STARTED' }}
-                        </strong>
-                    </p>
-
-                    <div class="task-actions">
-
-                        {% if task['workflow_state'] == 'CREATED' %}
-                        <form method="POST"
-                              action="{{ url_for('tasks.start_task_workflow', task_id=task['id']) }}">
-                            <button type="submit"
-                                    class="btn-small complete-btn">
-                                Start Workflow
-                            </button>
-                        </form>
-
-                        {% elif task['workflow_state'] == 'IN_PROGRESS' %}
-                        <form method="POST"
-                              action="{{ url_for('tasks.request_evidence', task_id=task['id']) }}">
-                            <button type="submit"
-                                    class="btn-small complete-btn">
-                                Request Evidence
-                            </button>
-                        </form>
-                        {% endif %}
-
-                        {% if task['status'] == 'Pending' %}
-                        <a href="/complete-task/{{ task['id'] }}"
-                           class="btn-small complete-btn">
-                            Mark Completed
-                        </a>
-                        {% endif %}
-
-                        <a href="/delete-task/{{ task['id'] }}"
-                           class="btn-small delete-btn">
-                            Delete
-                        </a>
-
-                    </div>
-
-                </div>
-                {% endfor %}
-
-            </div>
-
-            {% else %}
-            <p>No tasks yet. Start building your execution streak.</p>
+        <div class="meta">
+            {% if task['project_title'] %}<span>{{ task['project_title'] }}</span><span>&middot;</span>{% endif %}
+            <span>priority: {{ task['priority'] or 'medium' }}</span>
+            {% if task['due_date'] %}<span>&middot;</span><span>due {{ task['due_date'] }}</span>{% endif %}
+            <span>&middot;</span>
+            <span>self-reported: {{ task['status'] }}</span>
+        </div>
+        <div class="progress {{ 'verified' if card.state == 'VERIFIED' else 'rejected' if card.state == 'REJECTED' }}" role="progressbar" aria-valuenow="{{ card.progress }}" aria-valuemin="0" aria-valuemax="100" aria-label="Verification progress">
+            <i style="width: {{ card.progress }}%"></i>
+        </div>
+        <div class="foot">
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('tasks.task_detail', task_id=task['id']) }}">Open</a>
+            {% for event in card.actions %}
+                {% if event.value in ('START', 'REQUEST_EVIDENCE', 'RESTART') %}
+                {{ post_button(url_for('tasks.fire_event', task_id=task['id'], event_name=event.value), event_labels[event], 'btn btn-primary btn-sm', next='dashboard') }}
+                {% endif %}
+            {% endfor %}
+            {% if task['status'] == 'Pending' %}
+            {{ post_button(url_for('tasks.complete_task', task_id=task['id']), 'Mark done', 'btn btn-ghost btn-sm', next='dashboard') }}
+            {% endif %}
+            {% if card.state != 'VERIFIED' %}
+            {{ post_button(url_for('tasks.delete_task', task_id=task['id']), 'Delete', 'btn btn-danger btn-sm', confirm='Delete this task and its workflow history?') }}
             {% endif %}
         </div>
-
-    </div>
-
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-
-</body>
-</html>
-```
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card empty">
+    <h3>No tasks yet</h3>
+    <p>Create a task, work on it, then back it up with evidence a reviewer can check.</p>
+    <p style="margin-top:16px"><a class="btn btn-primary" href="{{ url_for('tasks.add_task') }}">Create your first task</a></p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import state_pill %}
+{% block title %}Review queue{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Review queue</h1>
+        <p>Evidence submitted by other developers. You can never review your own work.</p>
+    </div>
+</div>
+<div class="card">
+    {% if queue %}
+    <table class="queue">
+        <thead><tr><th>Task</th><th>Developer</th><th>State</th><th>Evidence items</th><th>Waiting since</th><th></th></tr></thead>
+        <tbody>
+        {% for item in queue %}
+        <tr>
+            <td>{{ item['title'] }}</td>
+            <td>{{ item['owner_name'] }}</td>
+            <td>{{ state_pill(item['current_state'], item['current_state'].replace('_', ' ').title()) }}</td>
+            <td>{{ item['evidence_count'] }}</td>
+            <td class="muted small">{{ item['last_change'] }} UTC</td>
+            <td><a class="btn btn-primary btn-sm" href="{{ url_for('tasks.task_detail', task_id=item['task_id']) }}">Open</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty"><h3>Nothing to review</h3><p>When a developer submits evidence it will appear here.</p></div>
+    {% endif %}
+</div>
+{% endblock %}

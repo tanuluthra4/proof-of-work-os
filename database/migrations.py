@@ -1,0 +1,200 @@
+"""Safe, repeatable schema upgrades.
+
+`schema.sql` is the original baseline and is idempotent (CREATE ... IF NOT
+EXISTS). Everything added afterwards lives here as an ordered migration,
+tracked with SQLite's `PRAGMA user_version`. The same code path upgrades an
+existing database *and* builds a fresh one, so the two can never drift.
+
+Migrations never drop tables or delete rows.
+"""
+import logging
+from datetime import datetime, timezone
+
+from database.db import transaction
+from services.integrity import GENESIS_HASH, compute_hash
+
+log = logging.getLogger(__name__)
+
+
+def _columns(conn, table):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _add_column(conn, table, definition):
+    name = definition.split()[0]
+    if name not in _columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
+def _migration_1(conn):
+    """Roles, evidence <-> workflow link, hash-chained audit trail."""
+    _add_column(conn, "users", "role TEXT NOT NULL DEFAULT 'developer'")
+
+    _add_column(conn, "workflow_instances", "round INTEGER NOT NULL DEFAULT 1")
+    _add_column(conn, "workflow_instances", "chain_head TEXT")
+    _add_column(conn, "workflow_instances", "transition_count INTEGER NOT NULL DEFAULT 0")
+
+    for definition in (
+        "seq INTEGER",
+        "actor_id INTEGER",
+        "actor_role TEXT",
+        "evidence_digest TEXT",
+        "prev_hash TEXT",
+        "hash TEXT",
+    ):
+        _add_column(conn, "state_transitions", definition)
+
+    _add_column(conn, "evidence",
+                "workflow_id INTEGER REFERENCES workflow_instances(id) ON DELETE CASCADE")
+    _add_column(conn, "evidence", "round INTEGER NOT NULL DEFAULT 1")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS blocked_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_id INTEGER NOT NULL,
+            actor_id INTEGER,
+            event TEXT NOT NULL,
+            from_state TEXT,
+            code TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (workflow_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Tasks that predate the workflow engine (or lost their workflow) get
+    # exactly one, once, here - instead of on every dashboard page load.
+    conn.execute(
+        """
+        INSERT INTO workflow_instances (user_id, task_id, current_state)
+        SELECT t.user_id, t.id, 'CREATED'
+        FROM tasks t
+        WHERE NOT EXISTS (SELECT 1 FROM workflow_instances w WHERE w.task_id = t.id)
+        """
+    )
+
+    _backfill_chain(conn)
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_workflow ON evidence(workflow_id, round)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_workflow ON blocked_actions(workflow_id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_transition_seq ON state_transitions(workflow_id, seq)"
+    )
+
+    duplicates = conn.execute(
+        """
+        SELECT task_id FROM workflow_instances
+        WHERE task_id IS NOT NULL GROUP BY task_id HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    if duplicates:
+        # Never delete history to satisfy a constraint. Leave the index out and say so.
+        log.warning("Duplicate workflows exist for tasks %s; one-workflow-per-task "
+                    "index was NOT created.", [d["task_id"] for d in duplicates])
+    else:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_task "
+            "ON workflow_instances(task_id) WHERE task_id IS NOT NULL"
+        )
+
+    # The audit log is append-only at the database level. (Deleting a whole
+    # workflow still cascades - the parent row is already gone by then.)
+    conn.execute("DROP TRIGGER IF EXISTS state_transitions_no_update")
+    conn.execute(
+        """
+        CREATE TRIGGER state_transitions_no_update
+        BEFORE UPDATE ON state_transitions
+        BEGIN
+            SELECT RAISE(ABORT, 'state_transitions is append-only');
+        END
+        """
+    )
+    conn.execute("DROP TRIGGER IF EXISTS state_transitions_no_delete")
+    conn.execute(
+        """
+        CREATE TRIGGER state_transitions_no_delete
+        BEFORE DELETE ON state_transitions
+        WHEN EXISTS (SELECT 1 FROM workflow_instances WHERE id = OLD.workflow_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'state_transitions is append-only');
+        END
+        """
+    )
+
+
+def _backfill_chain(conn):
+    """Seal transitions recorded before the chain existed.
+
+    Their original content is untouched; the chain simply starts being
+    tamper-evident from the moment of migration. They are marked
+    actor_role='legacy' so nobody mistakes them for chain-era records.
+    """
+    sealed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    workflows = conn.execute("SELECT id FROM workflow_instances").fetchall()
+
+    for workflow in workflows:
+        rows = conn.execute(
+            "SELECT * FROM state_transitions WHERE workflow_id = ? ORDER BY id",
+            (workflow["id"],),
+        ).fetchall()
+        if not rows or all(row["hash"] for row in rows):
+            continue
+
+        previous_hash = GENESIS_HASH
+        rounds = 1
+        for seq, row in enumerate(rows, start=1):
+            record = {
+                "workflow_id": row["workflow_id"],
+                "seq": seq,
+                "from_state": row["from_state"],
+                "event": row["event"],
+                "to_state": row["to_state"],
+                "condition_result": row["condition_result"],
+                "reason": row["reason"],
+                "actor_id": None,
+                "actor_role": "legacy",
+                "evidence_digest": None,
+                "created_at": row["created_at"] or sealed_at,
+                "prev_hash": previous_hash,
+            }
+            record["hash"] = compute_hash(record)
+            conn.execute(
+                """
+                UPDATE state_transitions
+                SET seq = ?, actor_id = NULL, actor_role = 'legacy',
+                    evidence_digest = NULL, prev_hash = ?, hash = ?, created_at = ?
+                WHERE id = ?
+                """,
+                (seq, previous_hash, record["hash"], record["created_at"], row["id"]),
+            )
+            if row["event"] == "RESTART":
+                rounds += 1
+            previous_hash = record["hash"]
+
+        conn.execute(
+            "UPDATE workflow_instances SET chain_head = ?, transition_count = ?, round = ? "
+            "WHERE id = ?",
+            (previous_hash, len(rows), rounds, workflow["id"]),
+        )
+
+
+MIGRATIONS = [
+    (1, _migration_1),
+]
+LATEST_VERSION = MIGRATIONS[-1][0]
+
+
+def run_migrations(conn):
+    """Apply every pending migration, each in its own transaction."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    for target, migrate in MIGRATIONS:
+        if version >= target:
+            continue
+        with transaction(conn):
+            migrate(conn)
+            conn.execute(f"PRAGMA user_version = {int(target)}")
+        log.info("Applied database migration %s", target)
+        version = target
+    return version

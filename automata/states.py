@@ -1,7 +1,8 @@
 from enum import Enum
 
+
 class WorkflowState(Enum):
-    """Enum representing the different states of a workflow."""
+    """The states (Q) of the verification automaton."""
     CREATED = "CREATED"
     IN_PROGRESS = "IN_PROGRESS"
     EVIDENCE_REQUIRED = "EVIDENCE_REQUIRED"
@@ -10,8 +11,9 @@ class WorkflowState(Enum):
     VERIFIED = "VERIFIED"
     REJECTED = "REJECTED"
 
+
 class WorkflowEvent(Enum):
-    """Enum representing the different events that can occur in a workflow."""
+    """The input alphabet (Sigma) of the verification automaton."""
     START = "START"
     REQUEST_EVIDENCE = "REQUEST_EVIDENCE"
     SUBMIT_EVIDENCE = "SUBMIT_EVIDENCE"
@@ -19,3 +21,9 @@ class WorkflowEvent(Enum):
     APPROVE = "APPROVE"
     REJECT = "REJECT"
     RESTART = "RESTART"
+
+
+class Actor(Enum):
+    """Who is allowed to fire an event."""
+    OWNER = "OWNER"        # the developer who owns the task
+    REVIEWER = "REVIEWER"  # a reviewer who does NOT own the task

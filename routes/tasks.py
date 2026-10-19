@@ -1,218 +1,383 @@
-from flask import Blueprint, render_template, request, redirect, session, flash
+import re
+from collections import OrderedDict
 
-from database.db import get_db_connection
-from services.automata_engine import AutomataEngine
-from automata.states import WorkflowEvent
+from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
+
+from automata.states import WorkflowEvent, WorkflowState
+from automata.transitions import events_available_to, get_allowed_events
+from database.db import get_db_connection, transaction
+from routes.helpers import flash_errors, login_required, reviewer_required
+from services.automata_engine import AutomataEngine, TransitionBlocked, WorkflowNotFound
+from services.evidence_service import (
+    EVIDENCE_TYPES,
+    EvidenceError,
+    EvidenceNotAllowed,
+    add_evidence,
+    delete_draft_evidence,
+    list_evidence,
+    score_evidence,
+)
+from services.fsm_view import EVENT_LABELS, STATE_LABELS, build_fsm_view
 
 tasks_bp = Blueprint("tasks", __name__)
+engine = AutomataEngine()
 
-automata_engine = AutomataEngine()
+PRIORITIES = ("low", "medium", "high")
+LOCKED_FOR_EDIT = {"EVIDENCE_SUBMITTED", "VALIDATING", "VERIFIED"}
+# Reviewers may open a task only once its evidence has been submitted.
+REVIEWER_VISIBLE = {"EVIDENCE_SUBMITTED", "VALIDATING", "VERIFIED", "REJECTED"}
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-@tasks_bp.route("/add-task", methods=["GET", "POST"])
-def add_task():
-    if "user_id" not in session:
-        return redirect("/login")
-
-    conn = get_db_connection()
-
-    projects = conn.execute(
+# ------------------------------------------------------------------ helpers
+def _load_task(conn, task_id):
+    return conn.execute(
         """
-        SELECT id, title
-        FROM projects
-        WHERE user_id = ?
-        ORDER BY created_at DESC
+        SELECT t.id, t.user_id, t.project_id, t.title, t.description, t.status, t.priority,
+               t.due_date, t.created_at, p.title AS project_title,
+               w.id AS workflow_id, w.current_state, w.round, w.result,
+               w.completed_at AS decided_at, u.username AS owner_name
+        FROM tasks t
+        JOIN workflow_instances w ON w.task_id = t.id
+        JOIN users u ON u.id = t.user_id
+        LEFT JOIN projects p ON p.id = t.project_id
+        WHERE t.id = ?
         """,
-        (session["user_id"],),
+        (task_id,),
+    ).fetchone()
+
+
+def _access_for(task):
+    """'owner', 'reviewer' or None. None must look like a 404 to the caller."""
+    if task is None:
+        return None
+    if task["user_id"] == g.user["id"]:
+        return "owner"
+    if g.user["role"] == "reviewer" and task["current_state"] in REVIEWER_VISIBLE:
+        return "reviewer"
+    return None
+
+
+def _owned_task_or_404(conn, task_id):
+    task = _load_task(conn, task_id)
+    if task is None or task["user_id"] != g.user["id"]:
+        abort(404)
+    return task
+
+
+def _user_projects(conn):
+    return conn.execute(
+        "SELECT id, title FROM projects WHERE user_id = ? ORDER BY created_at DESC",
+        (g.user["id"],),
     ).fetchall()
 
-    if request.method == "POST":
-        title = request.form.get("title", "").strip()
-        project_id = request.form.get("project_id") or None
-        user_id = session["user_id"]
 
-        if not title:
-            conn.close()
-            return render_template(
-                "add_task.html",
-                projects=projects,
-                error="Task title is required.",
-            )
+def _read_task_form(conn):
+    """Validate the task form. Returns (values, problems)."""
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip() or None
+    priority = request.form.get("priority", "medium")
+    due_date = request.form.get("due_date", "").strip() or None
+    project_id = request.form.get("project_id", "").strip() or None
+    problems = []
 
-        cursor = conn.execute(
-            """
-            INSERT INTO tasks (
-                user_id,
-                project_id,
-                title,
-                status
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                project_id,
-                title,
-                "Pending",
-            ),
+    if not title:
+        problems.append("Task title is required.")
+    elif len(title) > 200:
+        problems.append("Task title must be at most 200 characters.")
+    if description and len(description) > 2000:
+        problems.append("Description must be at most 2000 characters.")
+    if priority not in PRIORITIES:
+        problems.append("Choose a valid priority.")
+    if due_date and not _DATE.match(due_date):
+        problems.append("Due date must look like YYYY-MM-DD.")
+
+    if project_id is not None:
+        owned = (
+            conn.execute(
+                "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, g.user["id"]),
+            ).fetchone()
+            if project_id.isdigit() else None
         )
+        if owned is None:
+            problems.append("Choose one of your own projects.")
+        else:
+            project_id = owned["id"]
 
-        task_id = cursor.lastrowid
+    values = {
+        "title": title, "description": description, "priority": priority,
+        "due_date": due_date, "project_id": project_id,
+    }
+    return values, problems
 
-        conn.commit()
+
+def _redirect_after_event():
+    if request.form.get("next") == "dashboard":
+        return url_for("main.dashboard")
+    return None
+
+
+# -------------------------------------------------------------- create/edit
+@tasks_bp.route("/add-task", methods=["GET", "POST"])
+@login_required
+def add_task():
+    conn = get_db_connection()
+    try:
+        projects = _user_projects(conn)
+        if request.method == "POST":
+            values, problems = _read_task_form(conn)
+            if problems:
+                flash_errors(problems)
+                return render_template("task_form.html", projects=projects, task=values,
+                                       mode="create", priorities=PRIORITIES)
+
+            # The task and its workflow are created together or not at all.
+            with transaction(conn):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO tasks (user_id, project_id, title, description, status,
+                                       priority, due_date)
+                    VALUES (?, ?, ?, ?, 'Pending', ?, ?)
+                    """,
+                    (g.user["id"], values["project_id"], values["title"],
+                     values["description"], values["priority"], values["due_date"]),
+                )
+                task_id = cursor.lastrowid
+                engine.create_workflow(g.user["id"], task_id, conn=conn)
+
+            flash("Task created. Its proof workflow starts in CREATED.", "success")
+            return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+        return render_template("task_form.html", projects=projects, task={}, mode="create",
+                               priorities=PRIORITIES)
+    finally:
         conn.close()
 
-        # Every task starts its proof workflow in CREATED state.
-        automata_engine.create_workflow(
-            user_id=user_id,
-            task_id=task_id,
+
+@tasks_bp.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_task(task_id):
+    conn = get_db_connection()
+    try:
+        task = dict(_owned_task_or_404(conn, task_id))
+        if task["current_state"] in LOCKED_FOR_EDIT:
+            flash("This task is locked while its evidence is under review or after verification.",
+                  "error")
+            return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+        projects = _user_projects(conn)
+        if request.method == "POST":
+            values, problems = _read_task_form(conn)
+            if problems:
+                flash_errors(problems)
+                values["id"] = task_id
+                return render_template("task_form.html", projects=projects, task=values,
+                                       mode="edit", priorities=PRIORITIES)
+            with transaction(conn):
+                conn.execute(
+                    """
+                    UPDATE tasks SET title = ?, description = ?, project_id = ?,
+                                     priority = ?, due_date = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (values["title"], values["description"], values["project_id"],
+                     values["priority"], values["due_date"], task_id, g.user["id"]),
+                )
+            flash("Task updated.", "success")
+            return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+        return render_template("task_form.html", projects=projects, task=task, mode="edit",
+                               priorities=PRIORITIES)
+    finally:
+        conn.close()
+
+
+@tasks_bp.route("/tasks/<int:task_id>/delete", methods=["POST"])
+@login_required
+def delete_task(task_id):
+    conn = get_db_connection()
+    try:
+        task = _owned_task_or_404(conn, task_id)
+        if task["current_state"] == "VERIFIED":
+            flash("Verified tasks are permanent proof records and cannot be deleted.", "error")
+            return redirect(url_for("tasks.task_detail", task_id=task_id))
+        with transaction(conn):
+            conn.execute("DELETE FROM tasks WHERE id = ? AND user_id = ?", (task_id, g.user["id"]))
+        flash("Task deleted.", "success")
+    finally:
+        conn.close()
+    return redirect(url_for("main.dashboard"))
+
+
+@tasks_bp.route("/tasks/<int:task_id>/complete", methods=["POST"])
+@login_required
+def complete_task(task_id):
+    """Self-reported completion. It does NOT verify anything."""
+    conn = get_db_connection()
+    try:
+        _owned_task_or_404(conn, task_id)
+        with transaction(conn):
+            conn.execute(
+                "UPDATE tasks SET status = 'Completed', "
+                "completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP) "
+                "WHERE id = ? AND user_id = ?",
+                (task_id, g.user["id"]),
+            )
+        flash("Marked done (self-reported). Submit evidence to get it verified.", "success")
+    finally:
+        conn.close()
+    return redirect(_redirect_after_event() or url_for("tasks.task_detail", task_id=task_id))
+
+
+# ------------------------------------------------------------------- detail
+@tasks_bp.route("/tasks/<int:task_id>")
+@login_required
+def task_detail(task_id):
+    conn = get_db_connection()
+    try:
+        task = _load_task(conn, task_id)
+        access = _access_for(task)
+        if access is None:
+            abort(404)
+
+        is_owner = access == "owner"
+        is_reviewer = access == "reviewer"
+        state = WorkflowState(task["current_state"])
+        workflow_id = task["workflow_id"]
+
+        history = engine.get_history(workflow_id)
+        actions = events_available_to(state, is_owner, is_reviewer)
+        fsm = build_fsm_view(task["current_state"], history, actions)
+
+        evidence_by_round = OrderedDict()
+        for item in list_evidence(conn, workflow_id):
+            evidence_by_round.setdefault(item["round"], []).append(item)
+        current_round_items = evidence_by_round.get(task["round"], [])
+        # While REJECTED the round counter has not advanced yet, so the rejected
+        # submission is still "current"; after RESTART a new empty round starts.
+        scored_items = current_round_items or (
+            next(iter(evidence_by_round.values()), []) if evidence_by_round else []
         )
 
-        return redirect("/dashboard")
+        probe_events = [e for e in WorkflowEvent if e not in get_allowed_events(state)]
 
-    conn.close()
+        return render_template(
+            "task_detail.html",
+            task=task,
+            is_owner=is_owner,
+            is_reviewer=is_reviewer,
+            state=state,
+            state_label=STATE_LABELS[state],
+            actions=actions,
+            event_labels=EVENT_LABELS,
+            probe_events=probe_events,
+            fsm=fsm,
+            history=history,
+            blocked=engine.get_blocked_actions(workflow_id),
+            chain=engine.verify_history(workflow_id),
+            evidence_by_round=evidence_by_round,
+            current_round=task["round"],
+            evidence_score=score_evidence(scored_items),
+            evidence_types=EVIDENCE_TYPES,
+            can_add_evidence=is_owner and state == WorkflowState.EVIDENCE_REQUIRED,
+            can_edit=is_owner and task["current_state"] not in LOCKED_FOR_EDIT,
+        )
+    finally:
+        conn.close()
 
-    return render_template(
-        "add_task.html",
-        projects=projects,
-    )
 
-
-@tasks_bp.route("/delete-task/<int:task_id>")
-def delete_task(task_id):
-    if "user_id" not in session:
-        return redirect("/login")
-
+# ------------------------------------------------------- workflow events
+@tasks_bp.route("/tasks/<int:task_id>/events/<event_name>", methods=["POST"])
+@login_required
+def fire_event(task_id, event_name):
     conn = get_db_connection()
-
-    conn.execute(
-        """
-        DELETE FROM tasks
-        WHERE id = ? AND user_id = ?
-        """,
-        (task_id, session["user_id"]),
-    )
-
-    conn.commit()
-    conn.close()
-
-    return redirect("/dashboard")
-
-
-@tasks_bp.route("/complete-task/<int:task_id>")
-def complete_task(task_id):
-    if "user_id" not in session:
-        return redirect("/login")
-
-    conn = get_db_connection()
-
-    conn.execute(
-        """
-        UPDATE tasks
-        SET status = 'Completed',
-            completed_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND user_id = ?
-        """,
-        (task_id, session["user_id"]),
-    )
-
-    conn.commit()
-    conn.close()
-
-    return redirect("/dashboard")
-
-
-@tasks_bp.route("/tasks/<int:task_id>/start", methods=["POST"])
-def start_task_workflow(task_id):
-    if "user_id" not in session:
-        return redirect("/login")
-
-    user_id = session["user_id"]
-    conn = get_db_connection()
-
     try:
-        # Confirm that this task belongs to the logged-in user.
-        task = conn.execute(
-            """
-            SELECT id
-            FROM tasks
-            WHERE id = ? AND user_id = ?
-            """,
-            (task_id, user_id),
-        ).fetchone()
-
-        if task is None:
-            return "Task not found.", 404
-
-        # Find this task's workflow, scoped to the current user.
-        workflow = conn.execute(
-            """
-            SELECT id, current_state
-            FROM workflow_instances
-            WHERE task_id = ? AND user_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (task_id, user_id),
-        ).fetchone()
-
-        if workflow is None:
-            return "Workflow not found for this task.", 404
-
-        workflow_id = workflow["id"]
-
+        task = _load_task(conn, task_id)
+        if _access_for(task) is None:
+            abort(404)
     finally:
         conn.close()
 
     try:
-        automata_engine.transition(
-            workflow_id,
-            WorkflowEvent.START,
-            reason="Task workflow started by its owner.",
+        result = engine.transition(
+            task["workflow_id"], event_name, g.user["id"], request.form.get("reason")
         )
-    except ValueError as error:
-        flash(str(error), "error")
+        label = EVENT_LABELS.get(WorkflowEvent(result["event"]), result["event"])
+        flash(f"{label}: {result['from_state']} → {result['to_state']}.", "success")
+    except TransitionBlocked as blocked:
+        flash(f"Blocked ({blocked.code}): {blocked}", "error")
+    except WorkflowNotFound:
+        abort(404)
 
-    return redirect("/dashboard")
+    return redirect(_redirect_after_event() or url_for("tasks.task_detail", task_id=task_id))
 
-@tasks_bp.route(
-    "/tasks/<int:task_id>/request-evidence",
-    methods=["POST"]
-)
-def request_evidence(task_id):
-    if "user_id" not in session:
-        return redirect("/login")
 
+# ---------------------------------------------------------------- evidence
+@tasks_bp.route("/tasks/<int:task_id>/evidence", methods=["POST"])
+@login_required
+def submit_evidence_item(task_id):
     conn = get_db_connection()
-
-    workflow = conn.execute(
-        """
-        SELECT w.id
-        FROM workflow_instances w
-        JOIN tasks t ON t.id = w.task_id
-        WHERE t.id = ?
-          AND t.user_id = ?
-          AND w.user_id = ?
-        ORDER BY w.id DESC
-        LIMIT 1
-        """,
-        (task_id, session["user_id"], session["user_id"]),
-    ).fetchone()
-
-    conn.close()
-
-    if workflow is None:
-        flash("No workflow exists for this task.", "error")
-        return redirect("/dashboard")
-
     try:
-        automata_engine.transition(
-            workflow["id"],
-            WorkflowEvent.REQUEST_EVIDENCE,
-            reason="Evidence requested by task owner.",
-        )
-        flash("Evidence requested successfully.", "success")
-    except ValueError as error:
-        flash(str(error), "error")
+        task = _owned_task_or_404(conn, task_id)
+        try:
+            add_evidence(
+                conn,
+                task["workflow_id"],
+                g.user["id"],
+                request.form.get("evidence_type"),
+                request.form.get("evidence_url"),
+                request.form.get("title"),
+                request.form.get("description"),
+            )
+            flash("Evidence added as a draft. Submit it for review when you are ready.", "success")
+        except EvidenceError as error:
+            flash_errors(error.problems)
+        except EvidenceNotAllowed as error:
+            flash(str(error), "error")
+    finally:
+        conn.close()
+    return redirect(url_for("tasks.task_detail", task_id=task_id))
 
-    return redirect("/dashboard")
+
+@tasks_bp.route("/tasks/<int:task_id>/evidence/<int:evidence_id>/delete", methods=["POST"])
+@login_required
+def remove_evidence_item(task_id, evidence_id):
+    conn = get_db_connection()
+    try:
+        task = _owned_task_or_404(conn, task_id)
+        try:
+            delete_draft_evidence(conn, task["workflow_id"], g.user["id"], evidence_id)
+            flash("Draft evidence removed.", "success")
+        except EvidenceNotAllowed as error:
+            flash(str(error), "error")
+    finally:
+        conn.close()
+    return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+
+# ------------------------------------------------------------ review queue
+@tasks_bp.route("/review")
+@reviewer_required
+def review_queue():
+    conn = get_db_connection()
+    try:
+        queue = conn.execute(
+            """
+            SELECT t.id AS task_id, t.title, u.username AS owner_name, w.current_state,
+                   w.round,
+                   (SELECT COUNT(*) FROM evidence e
+                     WHERE e.workflow_id = w.id AND e.round = w.round) AS evidence_count,
+                   (SELECT MAX(created_at) FROM state_transitions s
+                     WHERE s.workflow_id = w.id) AS last_change
+            FROM workflow_instances w
+            JOIN tasks t ON t.id = w.task_id
+            JOIN users u ON u.id = w.user_id
+            WHERE w.user_id != ? AND w.current_state IN ('EVIDENCE_SUBMITTED', 'VALIDATING')
+            ORDER BY last_change ASC
+            """,
+            (g.user["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    return render_template("review_queue.html", queue=queue, state_labels=STATE_LABELS)

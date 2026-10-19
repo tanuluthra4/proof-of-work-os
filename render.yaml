@@ -1,6 +1,22 @@
 services:
   - type: web
     name: proof-of-work-os
-    env: python
+    runtime: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python app.py"
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4"
+    healthCheckPath: /healthz
+    envVars:
+      - key: POW_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: REVIEWER_EMAILS
+        sync: false          # set in the Render dashboard, e.g. you@example.com
+      # SQLite lives on the instance filesystem. On the free plan it is wiped on
+      # every deploy/restart. For persistence attach a paid disk and uncomment:
+      # - key: DATABASE_PATH
+      #   value: /var/data/pow_os.db
+    # disk:
+    #   name: pow-data
+    #   mountPath: /var/data
+    #   sizeGB: 1

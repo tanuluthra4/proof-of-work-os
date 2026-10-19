@@ -1,58 +1,95 @@
-from .states import WorkflowState, WorkflowEvent
+"""The transition function (delta) of the verification automaton.
+
+This module is *pure*: no database, no Flask. It is the single source of
+truth for which moves are legal. The engine, routes, templates and the
+state-diagram visualisation all read from `TRANSITIONS`.
+
+Formally the machine is a deterministic finite automaton M = (Q, Sigma, delta, q0, F):
+    Q      = the seven WorkflowState values
+    Sigma  = the seven WorkflowEvent values
+    delta  = TRANSITIONS (a *partial* function: undefined moves are rejected)
+    q0     = CREATED
+    F      = {VERIFIED}   (accepting state: the proof was approved)
+"""
+from .states import Actor, WorkflowEvent, WorkflowState
+
+INITIAL_STATE = WorkflowState.CREATED
+ACCEPTING_STATES = frozenset({WorkflowState.VERIFIED})
 
 TRANSITIONS = {
     WorkflowState.CREATED: {
-        WorkflowEvent.START: WorkflowState.IN_PROGRESS
+        WorkflowEvent.START: WorkflowState.IN_PROGRESS,
     },
     WorkflowState.IN_PROGRESS: {
         WorkflowEvent.REQUEST_EVIDENCE: WorkflowState.EVIDENCE_REQUIRED,
     },
     WorkflowState.EVIDENCE_REQUIRED: {
-        WorkflowEvent.SUBMIT_EVIDENCE: WorkflowState.EVIDENCE_SUBMITTED
+        WorkflowEvent.SUBMIT_EVIDENCE: WorkflowState.EVIDENCE_SUBMITTED,
     },
     WorkflowState.EVIDENCE_SUBMITTED: {
-        WorkflowEvent.START_VALIDATION: WorkflowState.VALIDATING
+        WorkflowEvent.START_VALIDATION: WorkflowState.VALIDATING,
     },
     WorkflowState.VALIDATING: {
         WorkflowEvent.APPROVE: WorkflowState.VERIFIED,
-        WorkflowEvent.REJECT: WorkflowState.REJECTED
+        WorkflowEvent.REJECT: WorkflowState.REJECTED,
     },
-    WorkflowState.VERIFIED: {
-        WorkflowEvent.RESTART: WorkflowState.IN_PROGRESS
-    },
+    # VERIFIED is terminal: a verified proof can never be silently re-opened.
     WorkflowState.REJECTED: {
-        WorkflowEvent.RESTART: WorkflowState.IN_PROGRESS
-    }
+        WorkflowEvent.RESTART: WorkflowState.IN_PROGRESS,
+    },
 }
 
+# Who may fire each event. The owner drives the work; only a reviewer
+# (who is not the owner) may open a review or decide it.
+REQUIRED_ACTOR = {
+    WorkflowEvent.START: Actor.OWNER,
+    WorkflowEvent.REQUEST_EVIDENCE: Actor.OWNER,
+    WorkflowEvent.SUBMIT_EVIDENCE: Actor.OWNER,
+    WorkflowEvent.START_VALIDATION: Actor.REVIEWER,
+    WorkflowEvent.APPROVE: Actor.REVIEWER,
+    WorkflowEvent.REJECT: Actor.REVIEWER,
+    WorkflowEvent.RESTART: Actor.OWNER,
+}
+
+
+class InvalidTransitionError(ValueError):
+    """Raised when delta(state, event) is undefined."""
+
+
 def get_next_state(current_state: WorkflowState, event: WorkflowEvent) -> WorkflowState:
-    """
-    Get the next state based on the current state and event.
-
-    Args:
-        current_state (WorkflowState): The current state of the workflow.
-        event (WorkflowEvent): The event that triggers the transition.
-
-    Returns:
-        WorkflowState: The next state after applying the event.
-
-    Raises:
-        ValueError: If the transition is not defined for the given state and event.
-    """
-    if current_state in TRANSITIONS and event in TRANSITIONS[current_state]:
+    """Return delta(current_state, event) or raise InvalidTransitionError."""
+    try:
         return TRANSITIONS[current_state][event]
-    else:
-        raise ValueError(f"No transition defined for state {current_state.value} with event {event.value}.")
+    except KeyError:
+        raise InvalidTransitionError(
+            f"No transition defined for state {current_state.value} "
+            f"with event {event.value}."
+        ) from None
 
 
 def get_allowed_events(current_state: WorkflowState) -> list:
-    """
-    Get the list of allowed events for the current state.
-
-    Args:
-        current_state (WorkflowState): The current state of the workflow.
-
-    Returns:
-        list: The list of allowed events for the current state.
-    """
+    """Events that are defined (by the table alone) from `current_state`."""
     return list(TRANSITIONS.get(current_state, {}).keys())
+
+
+def is_terminal(state: WorkflowState) -> bool:
+    return not TRANSITIONS.get(state)
+
+
+def events_available_to(state: WorkflowState, is_owner: bool, is_reviewer: bool) -> list:
+    """Events defined from `state` that this viewer is also allowed to fire."""
+    available = []
+    for event in get_allowed_events(state):
+        required = REQUIRED_ACTOR[event]
+        if required is Actor.OWNER and is_owner:
+            available.append(event)
+        elif required is Actor.REVIEWER and is_reviewer and not is_owner:
+            available.append(event)
+    return available
+
+
+def all_transitions():
+    """Yield every (from_state, event, to_state) edge of the automaton."""
+    for from_state, moves in TRANSITIONS.items():
+        for event, to_state in moves.items():
+            yield from_state, event, to_state

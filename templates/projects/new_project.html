@@ -1,86 +1,36 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf %}
+{% block title %}New project{% endblock %}
+{% block content %}
+<div class="card" style="max-width:640px;margin:0 auto">
+    <h2>Create new project</h2>
+    <form method="post">
+        {{ csrf() }}
+        <label for="title">Title</label>
+        <input id="title" type="text" name="title" value="{{ form.get('title', '') }}" required maxlength="200">
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New Project | POW-OS</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css')}}">
-</head>
+        <label for="description">Description (optional)</label>
+        <textarea id="description" name="description" maxlength="2000">{{ form.get('description', '') }}</textarea>
 
-<body>
+        <label for="status">Status</label>
+        <select id="status" name="status">
+            {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if form.get('status') == s }}>{{ s }}</option>{% endfor %}
+        </select>
 
-    <div class="container">
+        <label for="start_date">Start date</label>
+        <input id="start_date" type="date" name="start_date" value="{{ form.get('start_date', '') }}">
+        <label for="end_date">End date</label>
+        <input id="end_date" type="date" name="end_date" value="{{ form.get('end_date', '') }}">
 
-        <div class="class auth-box">
+        <label for="github_url">GitHub repository URL</label>
+        <input id="github_url" type="url" name="github_url" value="{{ form.get('github_url', '') }}">
+        <label for="live_url">Live project URL</label>
+        <input id="live_url" type="url" name="live_url" value="{{ form.get('live_url', '') }}">
 
-            <h2>Create New Project</h2>
-
-            {% if error %}
-            <p style="color: red; margin-bottom: 10px;">
-                {{ error }}
-            </p>
-            {% endif %}
-
-            <form method="POST">
-
-                <input 
-                    type="text" 
-                    name="title" 
-                    placeholder="Project Title" 
-                    required
-                >
-
-                <textarea 
-                    name="description" 
-                    placeholder="Project Description (optional)" 
-                    rows="5"
-                ></textarea>
-
-                <select name="status" required>
-                    <option value="Pending">Pending</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Paused">Paused</option>
-                </select>
-
-                <label>Start Date</label>
-                <input 
-                    type="date" 
-                    name="start_date" 
-                >
-
-                <label>End Date</label>
-                <input
-                    type="date"
-                    name="end_date"
-                >
-
-                <input 
-                    type="url"
-                    name="github_url"
-                    placeholder="GitHub Repository URL"
-                >
-
-                <input 
-                    type="url"
-                    name="live_url"
-                    placeholder="Live Project URL"
-                >
-
-                <button type="submit">Create Project</button>
-
-            </form>
-
-            <p style="margin-top:20px;">
-                <a href="/projects">
-                    ← Back to Projects
-                </a>
-            </p>
-
+        <div class="actions-row">
+            <button type="submit" class="btn-primary">Create project</button>
+            <a class="btn btn-ghost" href="{{ url_for('projects.projects') }}">Cancel</a>
         </div>
-
-    </div>
-    
-</body>
-
-</html>
+    </form>
+</div>
+{% endblock %}
