@@ -227,6 +227,17 @@ class AutomataEngine:
                     "Add at least one piece of evidence before submitting for review.",
                 )
             sealed_digest = evidence_digest(evidence_rows)
+            reviewer = conn.execute(
+                "SELECT username FROM users WHERE id = ? AND role = 'reviewer'",
+                (workflow["reviewer_id"],),
+            ).fetchone() if workflow["reviewer_id"] else None
+            if reviewer is None:
+                raise TransitionBlocked(
+                    "GUARD_FAILED",
+                    "Choose the reviewer who should verify this evidence before submitting.",
+                )
+            # The recipient is sealed into the tamper-evident history via the reason text.
+            reason = f"Sent to reviewer {reviewer['username']}" + (f". {reason}" if reason else "")
         if event in (WorkflowEvent.APPROVE, WorkflowEvent.REJECT):
             if not reason or len(reason) < MIN_REASON_LENGTH:
                 raise TransitionBlocked(
@@ -323,6 +334,12 @@ class AutomataEngine:
             if actor["role"] != "reviewer":
                 raise TransitionBlocked(
                     "UNAUTHORIZED_ACTOR", f"Only a reviewer can fire {event.value}."
+                )
+            if workflow["reviewer_id"] != actor["id"]:
+                raise TransitionBlocked(
+                    "UNAUTHORIZED_ACTOR",
+                    "This evidence was not sent to you: only the reviewer the developer "
+                    "chose can act on it.",
                 )
 
     @staticmethod

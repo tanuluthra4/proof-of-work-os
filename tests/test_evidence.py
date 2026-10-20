@@ -5,7 +5,7 @@ from services.evidence_service import (
     EvidenceError, EvidenceNotAllowed, delete_draft_evidence, score_evidence, validate_evidence,
 )
 from tests.helpers import (
-    add_evidence_item, advance_to_evidence_required, fire, make_task, make_user, query,
+    add_evidence_item, advance_to_evidence_required, assign, fire, make_task, make_user, query,
 )
 from database.db import get_db_connection
 
@@ -70,6 +70,7 @@ def test_evidence_only_accepted_in_evidence_required(world):
         add_evidence_item(app, wf, alice)               # CREATED
     advance_to_evidence_required(app, wf, alice)
     add_evidence_item(app, wf, alice)                   # EVIDENCE_REQUIRED -> fine
+    assign(app, wf, alice, make_user(app, "rev", role="reviewer"))
     fire(app, wf, E.SUBMIT_EVIDENCE, alice)
     with pytest.raises(EvidenceNotAllowed):
         add_evidence_item(app, wf, alice, "commit", "https://github.com/octocat/hello/commit/abcdef1")  # locked
@@ -96,6 +97,7 @@ def test_submitted_evidence_is_not_verified_evidence(world):
     advance_to_evidence_required(app, wf, alice)
     add_evidence_item(app, wf, alice)
     assert query(app, "SELECT verification_status FROM evidence")[0][0] == "draft"
+    assign(app, wf, alice, make_user(app, "rev", role="reviewer"))
     fire(app, wf, E.SUBMIT_EVIDENCE, alice)
     assert query(app, "SELECT verification_status FROM evidence")[0][0] == "submitted"
     assert query(app, "SELECT current_state FROM workflow_instances WHERE id = ?", (wf,))[0][0] != "VERIFIED"
@@ -112,6 +114,7 @@ def test_draft_can_be_removed_but_submitted_cannot(world):
         assert conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
         conn.close()
     evidence_id = add_evidence_item(app, wf, alice)
+    assign(app, wf, alice, make_user(app, "rev", role="reviewer"))
     fire(app, wf, E.SUBMIT_EVIDENCE, alice)
     with app.app_context():
         conn = get_db_connection()

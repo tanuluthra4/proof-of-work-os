@@ -5,10 +5,13 @@
 <main class="narrow">
     <div class="auth-brand"><b>Proof<span style="color:var(--accent)">-of-Work</span> OS</b></div>
     <div class="card">
-        <h2>Create your account</h2>
+        <span class="pill role">{{ selected_role }}</span>
+        <h2 style="margin-top:8px">Create your {{ selected_role }} account</h2>
+        <p class="muted small" style="margin-bottom:14px">{% if selected_role == 'reviewer' %}Reviewers verify evidence that developers send to them, and record an approval or rejection with a reason.{% else %}Developers create tasks, attach evidence and ask a reviewer to verify it.{% endif %}</p>
         {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
         <form method="post">
             {{ csrf() }}
+            <input type="hidden" name="role" value="{{ selected_role }}">
             <label for="username">Username</label>
             <input id="username" type="text" name="username" required minlength="3" maxlength="30" autocomplete="username">
             <label for="email">Email</label>
@@ -18,7 +21,7 @@
             <p class="hint">At least 8 characters.</p>
             <button type="submit" class="btn-primary btn-block">Sign up</button>
         </form>
-        <p class="small muted" style="margin-top:16px">Already registered? <a href="{{ url_for('auth.login') }}">Log in</a></p>
+        <p class="small muted" style="margin-top:16px">Already registered? <a href="{{ url_for('auth.login', role=selected_role) }}">Log in</a></p>
     </div>
 </main>
 {% endblock %}

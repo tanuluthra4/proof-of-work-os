@@ -11,6 +11,7 @@
             <span>Priority: <b>{{ task['priority'] or 'medium' }}</b></span>
             {% if task['due_date'] %}<span>Due: <b>{{ task['due_date'] }}</b></span>{% endif %}
             <span>Self-reported: <b>{{ task['status'] }}</b></span>
+            <span>Reviewer: <b>{{ task['reviewer_name'] or 'not chosen yet' }}</b></span>
             <span>Submission round: <b>{{ current_round }}</b></span>
         </div>
         {% if task['description'] %}<p style="margin-top:10px">{{ task['description'] }}</p>{% endif %}
@@ -43,9 +44,9 @@
             {% elif is_owner and state.value == 'IN_PROGRESS' %}
                 <p class="muted small" style="margin-bottom:10px">When you have something to show, move to EVIDENCE_REQUIRED to attach proof.</p>
             {% elif is_owner and state.value == 'EVIDENCE_REQUIRED' %}
-                <p class="muted small" style="margin-bottom:10px">Add one or more evidence items below, then submit them. Submitted evidence is locked.</p>
+                <p class="muted small" style="margin-bottom:10px">Add evidence items below, choose the reviewer who should verify them, then submit. Submitted evidence is locked.</p>
             {% elif is_owner and state.value in ('EVIDENCE_SUBMITTED', 'VALIDATING') %}
-                <div class="notice">Waiting on a reviewer. Evidence is locked while it is under review.</div>
+                <div class="notice">Waiting on reviewer <b>{{ task['reviewer_name'] or 'unassigned' }}</b>. Evidence is locked while it is under review.</div>
             {% elif is_owner and state.value == 'REJECTED' %}
                 <div class="notice bad">Rejected. Read the reviewer&rsquo;s reason in the audit trail, then restart to submit corrected evidence as a new round.</div>
             {% elif is_reviewer and state.value in ('EVIDENCE_SUBMITTED', 'VALIDATING') %}
@@ -63,7 +64,7 @@
             {% if 'APPROVE' in (actions|map(attribute='value')|list) %}
             <form method="post" class="review-form" style="margin-top:14px">
                 {{ csrf() }}
-                <label for="reason">Decision reason (required, shown to the developer)</label>
+                <label for="reason">Decision reason (required; shown to the developer, and on their public proof page if they share it)</label>
                 <textarea id="reason" name="reason" minlength="5" required></textarea>
                 <div class="actions-row">
                     <button type="submit" class="btn-good" formaction="{{ url_for('tasks.fire_event', task_id=task['id'], event_name='APPROVE') }}">Approve &mdash; verify this proof</button>
@@ -90,6 +91,16 @@
         <section class="card" aria-labelledby="ev-h">
             <h2 id="ev-h">Evidence</h2>
             <div class="notice warn small" style="margin-bottom:12px">Submitted evidence is <b>not</b> verified evidence. A skill is only proven when a reviewer approves and the workflow reaches VERIFIED.</div>
+
+            {% if can_assign %}
+            <form method="post" action="{{ url_for('tasks.choose_reviewer', task_id=task['id']) }}" style="margin-bottom:18px">
+                {{ csrf() }}
+                <label for="reviewer">Send this evidence to a reviewer</label>
+                <input id="reviewer" type="text" name="reviewer" value="{{ task['reviewer_name'] or '' }}" placeholder="reviewer username or e-mail" required>
+                <p class="hint">Choose someone who can judge your work, e.g. a mentor, senior or the recruiter&rsquo;s technical contact. Only they will see this evidence. {% if task['reviewer_name'] %}Currently: <b>{{ task['reviewer_name'] }}</b>.{% endif %}</p>
+                <button type="submit" class="btn-ghost">{{ 'Change reviewer' if task['reviewer_name'] else 'Set reviewer' }}</button>
+            </form>
+            {% endif %}
 
             {% if can_add_evidence %}
             <form method="post" action="{{ url_for('tasks.submit_evidence_item', task_id=task['id']) }}" style="margin-bottom:18px">
@@ -135,6 +146,20 @@
             <p class="muted small">No evidence yet.{% if is_owner and state.value != 'EVIDENCE_REQUIRED' and state.value != 'VERIFIED' %} Evidence can be added once the task reaches EVIDENCE_REQUIRED.{% endif %}</p>
             {% endfor %}
         </section>
+
+        {% if is_owner and state.value == 'VERIFIED' %}
+        <section class="card" aria-labelledby="share-h">
+            <h2 id="share-h">Share this verified proof</h2>
+            {% if share_url %}
+            <p class="small muted" style="margin-bottom:8px">Anyone with this link can view this proof (title, evidence, reviewer and integrity check). Put it on your resume or LinkedIn.</p>
+            <input type="text" readonly value="{{ share_url }}" onclick="this.select()" aria-label="Public proof link">
+            {{ post_button(url_for('tasks.unshare_task', task_id=task['id']), 'Stop sharing', 'btn btn-danger btn-sm') }}
+            {% else %}
+            <p class="small muted" style="margin-bottom:10px">Private by default. Create a public read-only link to show recruiters. You can disable it any time.</p>
+            {{ post_button(url_for('tasks.share_task', task_id=task['id']), 'Create public link', 'btn btn-primary') }}
+            {% endif %}
+        </section>
+        {% endif %}
 
         {% if evidence_by_round %}
         <section class="card" aria-labelledby="score-h">

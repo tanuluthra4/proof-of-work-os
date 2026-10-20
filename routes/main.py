@@ -3,7 +3,7 @@ from flask import Blueprint, g, redirect, render_template, url_for
 from automata.states import WorkflowState
 from automata.transitions import events_available_to
 from database.db import get_db_connection
-from routes.helpers import login_required
+from routes.helpers import developer_required
 from services.fsm_view import EVENT_LABELS, STATE_LABELS, progress_percent
 
 main_bp = Blueprint("main", __name__)
@@ -15,8 +15,10 @@ IN_REVIEW = {"EVIDENCE_SUBMITTED", "VALIDATING"}
 @main_bp.route("/")
 def home():
     if g.get("user"):
+        if g.user["role"] == "reviewer":
+            return redirect(url_for("tasks.review_queue"))
         return redirect(url_for("main.dashboard"))
-    return redirect(url_for("auth.login"))
+    return render_template("welcome.html")
 
 
 @main_bp.route("/healthz")
@@ -25,7 +27,7 @@ def healthz():
 
 
 @main_bp.route("/dashboard")
-@login_required
+@developer_required
 def dashboard():
     conn = get_db_connection()
     try:
@@ -41,16 +43,6 @@ def dashboard():
             """,
             (g.user["id"],),
         ).fetchall()
-
-        pending_reviews = 0
-        if g.user["role"] == "reviewer":
-            pending_reviews = conn.execute(
-                """
-                SELECT COUNT(*) FROM workflow_instances
-                WHERE user_id != ? AND current_state IN ('EVIDENCE_SUBMITTED', 'VALIDATING')
-                """,
-                (g.user["id"],),
-            ).fetchone()[0]
     finally:
         conn.close()
 
@@ -81,6 +73,5 @@ def dashboard():
         cards=cards,
         counts=counts,
         total=len(cards),
-        pending_reviews=pending_reviews,
         event_labels=EVENT_LABELS,
     )

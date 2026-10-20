@@ -69,6 +69,18 @@ def reviewer_required(view):
     return wrapped
 
 
+def developer_required(view):
+    """Developer-only pages. Reviewers are sent to their own queue."""
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if g.user["role"] == "reviewer":
+            return redirect(url_for("tasks.review_queue"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 def start_session(user_row):
     session.clear()
     session.permanent = True

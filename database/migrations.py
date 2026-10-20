@@ -180,8 +180,21 @@ def _backfill_chain(conn):
         )
 
 
+def _migration_2(conn):
+    """Evidence is sent to one named reviewer; verified proofs can be shared by link."""
+    _add_column(conn, "workflow_instances",
+                "reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
+    _add_column(conn, "workflow_instances", "share_token TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_workflow_reviewer ON workflow_instances(reviewer_id)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_share_token "
+        "ON workflow_instances(share_token) WHERE share_token IS NOT NULL"
+    )
+
+
 MIGRATIONS = [
     (1, _migration_1),
+    (2, _migration_2),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

@@ -229,3 +229,57 @@ def test_history_api_returns_actor_names(world):
     with app.app_context():
         history = AutomataEngine().get_history(wf)
     assert history[0]["actor_name"] == "alice" and history[0]["reason"] == "kick-off"
+
+
+def test_only_the_chosen_reviewer_can_act(world):
+    app, alice, rev, wf = world["app"], world["alice"], world["rev"], world["wf"]
+    other = make_user(app, "otto", role="reviewer")
+    advance_to_validating(app, wf, alice, rev)
+    with pytest.raises(TransitionBlocked) as error:
+        fire(app, wf, E.APPROVE, other, "I was not asked to review this")
+    assert error.value.code == "UNAUTHORIZED_ACTOR" and "not sent to you" in str(error.value)
+    assert state_of(app, wf) == "VALIDATING"
+    assert fire(app, wf, E.APPROVE, rev, "I was asked.")["to_state"] == "VERIFIED"
+
+
+def test_cannot_submit_without_choosing_a_reviewer(world):
+    from tests.helpers import add_evidence_item
+    app, alice, wf = world["app"], world["alice"], world["wf"]
+    advance_to_evidence_required(app, wf, alice)
+    add_evidence_item(app, wf, alice)
+    with pytest.raises(TransitionBlocked) as error:
+        fire(app, wf, E.SUBMIT_EVIDENCE, alice)
+    assert error.value.code == "GUARD_FAILED" and "reviewer" in str(error.value)
+
+
+def test_assignment_rules(world):
+    from services.evidence_service import EvidenceError, EvidenceNotAllowed, assign_reviewer
+    from tests.helpers import add_evidence_item, assign
+    app, alice, bob, rev, wf = world["app"], world["alice"], world["bob"], world["rev"], world["wf"]
+
+    def try_assign(owner, name):
+        with app.app_context():
+            conn = get_db_connection()
+            try:
+                return assign_reviewer(conn, wf, owner, name)
+            finally:
+                conn.close()
+
+    with pytest.raises(EvidenceNotAllowed):
+        try_assign(alice, "rev")                       # still CREATED
+    advance_to_evidence_required(app, wf, alice)
+    with pytest.raises(EvidenceError):
+        try_assign(alice, "bob")                       # a developer account
+    with pytest.raises(EvidenceError):
+        try_assign(alice, "")
+    with pytest.raises(EvidenceNotAllowed):
+        try_assign(bob, "rev")                         # not the owner
+    execute(app, "UPDATE users SET role = 'reviewer' WHERE id = ?", (alice,))
+    with pytest.raises(EvidenceError):
+        try_assign(alice, "alice")                     # cannot pick yourself
+    execute(app, "UPDATE users SET role = 'developer' WHERE id = ?", (alice,))
+    assert try_assign(alice, "REV@example.com") == "rev"
+    add_evidence_item(app, wf, alice)
+    fire(app, wf, E.SUBMIT_EVIDENCE, alice)
+    with pytest.raises(EvidenceNotAllowed):
+        try_assign(alice, "rev")                       # final after submission

@@ -24,10 +24,12 @@ class Config:
     DATABASE = DB_PATH
     SECRET_KEY = os.getenv("SECRET_KEY") or None
 
-    # Accounts whose e-mail is listed here are granted the `reviewer` role
-    # when they sign up or log in. Reviewers can approve/reject evidence for
-    # tasks that belong to *other* users (never their own).
+    # Roles are exclusive account types chosen at sign-up: "developer" or "reviewer".
+    # A reviewer only ever sees evidence that a developer explicitly sent to them.
+    # If REVIEWER_OPEN_SIGNUP is false, only e-mails listed in REVIEWER_EMAILS may
+    # register as reviewers (use this on a public deployment).
     REVIEWER_EMAILS = _csv_env("REVIEWER_EMAILS")
+    REVIEWER_OPEN_SIGNUP = os.getenv("REVIEWER_OPEN_SIGNUP", "1").lower() not in ("0", "false", "no")
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"

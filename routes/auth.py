@@ -1,6 +1,6 @@
 import sqlite3
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database.db import get_db_connection, transaction
@@ -9,19 +9,33 @@ from routes.helpers import start_session, valid_email, valid_username
 auth_bp = Blueprint("auth", __name__)
 
 
-def _maybe_promote(conn, user_id, email):
-    """Grant the reviewer role to e-mails listed in REVIEWER_EMAILS."""
-    if email.lower() in current_app.config["REVIEWER_EMAILS"]:
-        conn.execute("UPDATE users SET role = 'reviewer' WHERE id = ?", (user_id,))
+ROLES = ("developer", "reviewer")
+
+
+def _selected_role():
+    role = request.values.get("role", "developer").strip().lower()
+    if role not in ROLES:
+        abort(400)
+    return role
+
+
+def _home_for(role):
+    return url_for("tasks.review_queue") if role == "reviewer" else url_for("main.dashboard")
 
 
 @auth_bp.route("/signup", methods=["GET", "POST"])
 def signup():
+    selected_role = _selected_role()
     error = None
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
+
+        reviewer_allowed = (
+            current_app.config["REVIEWER_OPEN_SIGNUP"]
+            or email in current_app.config["REVIEWER_EMAILS"]
+        )
 
         if not valid_username(username):
             error = "Username must be 3-30 characters: letters, numbers, '.', '_' or '-'."
@@ -29,6 +43,8 @@ def signup():
             error = "Enter a valid email address."
         elif not (8 <= len(password) <= 128):
             error = "Password must be between 8 and 128 characters."
+        elif selected_role == "reviewer" and not reviewer_allowed:
+            error = "Reviewer accounts are invitation-only on this deployment."
         else:
             try:
                 with transaction() as conn:
@@ -41,27 +57,28 @@ def signup():
                                  else "Username already taken")
                     else:
                         cursor = conn.execute(
-                            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-                            (username, email, generate_password_hash(password)),
+                            "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)",
+                            (username, email, generate_password_hash(password), selected_role),
                         )
                         user_id = cursor.lastrowid
                         conn.execute(
                             "INSERT INTO profiles (user_id, full_name) VALUES (?, ?)",
                             (user_id, username),
                         )
-                        _maybe_promote(conn, user_id, email)
             except sqlite3.IntegrityError:
                 error = "That username or email is already registered."
             else:
                 if error is None:
                     start_session({"id": user_id, "username": username})
-                    return redirect(url_for("main.dashboard"))
+                    return redirect(_home_for(selected_role))
 
-    return render_template("signup.html", error=error)
+    return render_template("signup.html", error=error, selected_role=selected_role)
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
+    # The chosen portal must match the account's stored role; it never grants one.
+    selected_role = _selected_role()
     error = None
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
@@ -70,20 +87,25 @@ def login():
         conn = get_db_connection()
         try:
             user = conn.execute(
-                "SELECT id, username, email, password FROM users WHERE lower(email) = ?",
+                "SELECT id, username, email, password, role FROM users WHERE lower(email) = ?",
                 (email,),
             ).fetchone()
-            if user and check_password_hash(user["password"], password):
-                with transaction(conn):
-                    _maybe_promote(conn, user["id"], user["email"])
-                start_session(user)
-                return redirect(url_for("main.dashboard"))
         finally:
             conn.close()
 
-        error = "Invalid email or password"
+        if user and check_password_hash(user["password"], password):
+            if user["role"] != selected_role:
+                if user["role"] == "reviewer":
+                    error = "This is a reviewer account. Please use the Reviewer login."
+                else:
+                    error = "This is a developer account. Please use the Developer login."
+            else:
+                start_session(user)
+                return redirect(_home_for(user["role"]))
+        else:
+            error = "Invalid email or password"
 
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, selected_role=selected_role)
 
 
 @auth_bp.route("/logout", methods=["POST"])

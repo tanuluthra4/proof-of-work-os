@@ -224,3 +224,26 @@ table.queue { width: 100%; border-collapse: collapse; }
 
 .auth-brand { text-align: center; margin-bottom: 18px; font-size: 1.3rem; }
 .err-code { font-size: 3.5rem; font-weight: 800; color: var(--accent); line-height: 1; }
+
+
+/* ---------- role selection landing page ---------- */
+.welcome-page { width: min(1000px, 100% - 32px); margin: 0 auto; padding: clamp(48px, 9vh, 100px) 0 42px; }
+.welcome-brand { max-width: 690px; margin: 0 auto 38px; text-align: center; }
+.brand-mark { display: inline-grid; place-items: center; width: 48px; height: 48px; margin-bottom: 20px; border-radius: 15px; background: var(--accent); color: #fff; font-size: 1.4rem; font-weight: 800; box-shadow: var(--shadow); }
+.eyebrow { color: var(--accent); font-size: .72rem; font-weight: 800; letter-spacing: .13em; }
+.welcome-brand h1 { margin-top: 12px; font-size: clamp(2rem, 5vw, 3.45rem); line-height: 1.08; letter-spacing: -.045em; }
+.welcome-brand h1 span { color: var(--accent); }
+.welcome-copy { max-width: 590px; margin: 16px auto 0; color: var(--muted); font-size: 1.02rem; }
+.role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.role-card { display: flex; flex-direction: column; align-items: flex-start; padding: clamp(22px, 4vw, 34px); border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
+.role-card h2 { margin: 9px 0 8px; font-size: 1.45rem; }
+.role-card > p:not(.eyebrow):not(.role-footnote) { min-height: 76px; color: var(--muted); font-size: .94rem; }
+.role-icon { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 24px; border-radius: 13px; background: var(--accent-soft); color: var(--accent); font-family: var(--mono); font-size: 1.1rem; font-weight: 800; }
+.reviewer-card .role-icon { background: var(--good-soft); color: var(--good); }
+.role-card .btn { margin-top: 14px; }
+.reviewer-card .btn { background: var(--good); color: #fff; }
+.role-footnote { margin-top: 14px; color: var(--muted); font-size: .78rem; }
+.welcome-security { margin: 24px auto 0; text-align: center; color: var(--muted); font-size: .82rem; }
+.portal-heading { margin-bottom: 20px; }
+.portal-heading h2 { margin: 10px 0 4px; }
+@media (max-width: 680px) { .role-grid { grid-template-columns: 1fr; } .role-card > p:not(.eyebrow):not(.role-footnote) { min-height: 0; } .welcome-page { padding-top: 42px; } }

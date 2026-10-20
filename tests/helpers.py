@@ -2,7 +2,7 @@
 from automata.states import WorkflowEvent as E
 from database.db import get_db_connection, transaction
 from services.automata_engine import AutomataEngine
-from services.evidence_service import add_evidence
+from services.evidence_service import add_evidence, assign_reviewer
 
 engine = AutomataEngine()
 
@@ -42,6 +42,17 @@ def add_evidence_item(app, workflow_id, user_id, kind="github_repo",
             conn.close()
 
 
+def assign(app, workflow_id, owner_id, reviewer_id):
+    """Send the workflow's evidence to a reviewer (by username), as the owner."""
+    name = query(app, "SELECT username FROM users WHERE id = ?", (reviewer_id,))[0][0]
+    with app.app_context():
+        conn = get_db_connection()
+        try:
+            return assign_reviewer(conn, workflow_id, owner_id, name)
+        finally:
+            conn.close()
+
+
 def advance_to_evidence_required(app, workflow_id, owner_id):
     fire(app, workflow_id, E.START, owner_id)
     fire(app, workflow_id, E.REQUEST_EVIDENCE, owner_id)
@@ -50,6 +61,7 @@ def advance_to_evidence_required(app, workflow_id, owner_id):
 def advance_to_validating(app, workflow_id, owner_id, reviewer_id):
     advance_to_evidence_required(app, workflow_id, owner_id)
     add_evidence_item(app, workflow_id, owner_id)
+    assign(app, workflow_id, owner_id, reviewer_id)
     fire(app, workflow_id, E.SUBMIT_EVIDENCE, owner_id)
     fire(app, workflow_id, E.START_VALIDATION, reviewer_id)
 

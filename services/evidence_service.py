@@ -233,3 +233,48 @@ def delete_draft_evidence(conn, workflow_id, user_id, evidence_id):
         )
         if cursor.rowcount != 1:
             raise EvidenceNotAllowed("Evidence item not found.")
+
+
+def assign_reviewer(conn, workflow_id, owner_id, identifier):
+    """Choose which reviewer evidence is sent to (by username or e-mail).
+
+    Allowed while the owner is still collecting evidence, or - for workflows
+    that were submitted before assignment existed - while still unassigned.
+    Returns the reviewer's username.
+    """
+    identifier = (identifier or "").strip().lower()
+    if not identifier:
+        raise EvidenceError(["Enter the username or e-mail of the reviewer."])
+
+    with transaction(conn):
+        workflow = conn.execute(
+            "SELECT user_id, current_state, reviewer_id FROM workflow_instances WHERE id = ?",
+            (workflow_id,),
+        ).fetchone()
+        if workflow is None or workflow["user_id"] != owner_id:
+            raise EvidenceNotAllowed("Task not found.")
+        state = workflow["current_state"]
+        if not (state == WorkflowState.EVIDENCE_REQUIRED.value
+                or (state == WorkflowState.EVIDENCE_SUBMITTED.value and workflow["reviewer_id"] is None)):
+            raise EvidenceNotAllowed(
+                "The reviewer can only be chosen while you are preparing evidence; "
+                "after submission the request is final."
+            )
+
+        reviewer = conn.execute(
+            """
+            SELECT id, username FROM users
+            WHERE role = 'reviewer' AND (lower(username) = ? OR lower(email) = ?)
+            """,
+            (identifier, identifier),
+        ).fetchone()
+        if reviewer is None:
+            raise EvidenceError(["No reviewer account matches that username or e-mail."])
+        if reviewer["id"] == owner_id:
+            raise EvidenceError(["You cannot review your own work."])
+
+        conn.execute(
+            "UPDATE workflow_instances SET reviewer_id = ? WHERE id = ?",
+            (reviewer["id"], workflow_id),
+        )
+        return reviewer["username"]

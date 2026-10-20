@@ -1,7 +1,7 @@
 from flask import Blueprint, flash, g, redirect, render_template, request, url_for
 
 from database.db import get_db_connection, transaction
-from routes.helpers import clean_http_url, login_required
+from routes.helpers import clean_http_url, developer_required
 
 projects_bp = Blueprint("projects", __name__)
 
@@ -9,7 +9,7 @@ PROJECT_STATUSES = ("Active", "Pending", "Completed", "Paused")
 
 
 @projects_bp.route("/projects")
-@login_required
+@developer_required
 def projects():
     conn = get_db_connection()
     try:
@@ -36,7 +36,7 @@ def projects():
 
 
 @projects_bp.route("/projects/new", methods=["GET", "POST"])
-@login_required
+@developer_required
 def create_project():
     if request.method == "POST":
         title = request.form.get("title", "").strip()

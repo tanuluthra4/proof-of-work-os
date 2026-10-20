@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% from '_macros.html' import csrf %}
-{% block title %}Login{% endblock %}
+{% block title %}{{ "Reviewer login" if selected_role == "reviewer" else "Developer login" }}{% endblock %}
 {% block body %}
 <main class="narrow">
     <div class="auth-brand"><b>Proof<span style="color:var(--accent)">-of-Work</span> OS</b><p class="muted small">Skills backed by evidence, verified by an automaton.</p></div>
@@ -8,17 +8,29 @@
     {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
     {% endwith %}
     <div class="card">
-        <h2>Log in</h2>
+        <div class="portal-heading">
+            <span class="pill role">{{ selected_role }}</span>
+            <h2>{{ "Reviewer login" if selected_role == "reviewer" else "Developer login" }}</h2>
+            <p class="muted small">
+                {% if selected_role == "reviewer" %}
+                Sign in to review evidence that developers have sent to you.
+                {% else %}
+                Sign in to manage your tasks, projects, and evidence.
+                {% endif %}
+            </p>
+        </div>
         {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
         <form method="post">
             {{ csrf() }}
+            <input type="hidden" name="role" value="{{ selected_role }}">
             <label for="email">Email</label>
             <input id="email" type="email" name="email" required autocomplete="email">
             <label for="password">Password</label>
             <input id="password" type="password" name="password" required autocomplete="current-password">
             <button type="submit" class="btn-primary btn-block">Log in</button>
         </form>
-        <p class="small muted" style="margin-top:16px">No account? <a href="{{ url_for('auth.signup') }}">Sign up</a></p>
+        <p class="small muted" style="margin-top:16px">No account? <a href="{{ url_for('auth.signup', role=selected_role) }}">Create a {{ selected_role }} account</a></p>
+        <p class="small muted" style="margin-top:10px"><a href="{{ url_for('main.home') }}">← Back to role selection</a></p>
     </div>
 </main>
 {% endblock %}

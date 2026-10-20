@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block title %}Welcome{% endblock %}
+{% block body %}
+<main class="welcome-page">
+    <div class="welcome-brand">
+        <span class="brand-mark" aria-hidden="true">P</span>
+        <p class="eyebrow">PROOF-OF-WORK OS</p>
+        <h1>Make your work <span>provable.</span></h1>
+        <p class="welcome-copy">A structured way to submit developer evidence, review it, and record trustworthy verification decisions.</p>
+    </div>
+
+    <section class="role-grid" aria-label="Choose how to sign in">
+        <article class="role-card developer-card">
+            <div class="role-icon" aria-hidden="true">&lt;/&gt;</div>
+            <p class="eyebrow">BUILD &amp; SUBMIT</p>
+            <h2>I'm a Developer</h2>
+            <p>Create tasks, attach project evidence, and track each proof through the verification workflow.</p>
+            <a class="btn btn-primary btn-block" href="{{ url_for('auth.login', role='developer') }}">Continue as Developer <span aria-hidden="true">→</span></a>
+            <p class="role-footnote">New here? <a href="{{ url_for('auth.signup', role='developer') }}">Create a developer account</a>.</p>
+        </article>
+
+        <article class="role-card reviewer-card">
+            <div class="role-icon" aria-hidden="true">✓</div>
+            <p class="eyebrow">EXAMINE &amp; VERIFY</p>
+            <h2>I'm a Reviewer</h2>
+            <p>Verify evidence that developers send to you, and record an approval or rejection with a reason.</p>
+            <a class="btn btn-block" href="{{ url_for('auth.login', role='reviewer') }}">Continue as Reviewer <span aria-hidden="true">→</span></a>
+            <p class="role-footnote">New reviewer? <a href="{{ url_for('auth.signup', role='reviewer') }}">Create a reviewer account</a>.</p>
+        </article>
+    </section>
+
+    <p class="welcome-security"><span aria-hidden="true">⌁</span> Your role is fixed when you create the account, and is checked on every sign-in.</p>
+</main>
+{% endblock %}

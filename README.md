@@ -15,7 +15,9 @@ Proof-of-Work OS makes a claim count only after it passes a **controlled verific
 - Projects and tasks (create / view / edit / delete); every task gets one workflow
 - **Finite-state machine** governing `CREATED → IN_PROGRESS → EVIDENCE_REQUIRED → EVIDENCE_SUBMITTED → VALIDATING → VERIFIED / REJECTED` (+ `RESTART` after rejection)
 - Evidence submission (repo, commit, PR, deployment, demo, write-up, other link) with strict validation; evidence is locked once submitted
-- Reviewer role: only a reviewer who does **not** own the task can start a review, approve or reject, and must give a written reason
+- **Two separate account types, chosen at sign-up and sign-in** (landing page: *I'm a Developer* / *I'm a Reviewer*). Developers manage tasks and evidence; reviewers have their own page. Neither can use the other's area.
+- **Send evidence to a named reviewer** (username or e-mail). Only that reviewer sees it and only they can start a review, approve or reject (with a written reason). Nobody can review their own work.
+- **Shareable verified proof**: after approval, the developer can create a public read-only link (and `/u/<username>` profile) to put on a resume. It shows the evidence, the named reviewer, the reviewer's note and a live integrity check. Private until the developer creates the link; can be disabled.
 - **Standout feature — tamper-evident audit trail + live automaton view** (below)
 - Reviewer aid: transparent evidence *completeness* checklist (not automated verification)
 - Safe, repeatable schema migrations that preserve existing data
@@ -78,6 +80,8 @@ Atomicity: each transition runs in `BEGIN IMMEDIATE`; state update is a compare-
 
 Existing tables are kept. Migration 1 (tracked via `PRAGMA user_version`) adds: `users.role`; `workflow_instances.round/chain_head/transition_count`; chain columns on `state_transitions`; `evidence.workflow_id/round`; table `blocked_actions`; indexes (one workflow per task, unique `(workflow_id, seq)`); append-only triggers. Tasks lacking a workflow get one (replacing the old create-on-dashboard-load behaviour). Pre-existing transitions are sealed into the chain and marked `actor_role='legacy'`. Nothing is dropped or deleted.
 
+Migration 2 adds `workflow_instances.reviewer_id` (who the evidence was sent to) and `share_token` (public link; unique, null = private).
+
 Upgrade: just start the app or run `flask --app app init-db`. Safe to repeat. Back up your `.db` first as good practice.
 
 `tasks.status` (Pending/Completed) is the owner's **self-reported** progress. The **workflow state** is the verified truth. Approval also sets status to Completed.
@@ -91,13 +95,14 @@ export REVIEWER_EMAILS=reviewer@example.com        # optional; see below
 python app.py                                       # http://127.0.0.1:5000
 ```
 
-Demo with two accounts: sign up as a developer; sign up again (other browser/incognito) with the e-mail listed in `REVIEWER_EMAILS` to get reviewer powers. Or grant later: `flask --app app set-role someone@example.com reviewer`.
+Open `http://127.0.0.1:5000/` and choose **Developer** or **Reviewer** to reach the matching sign-in portal. The selected portal does not grant permissions: login checks the role stored for the account. Open `http://127.0.0.1:5000/`, choose **Developer** or **Reviewer**, and create an account for each (use two browsers or a private window). The role is fixed at sign-up and checked at every sign-in. On a public deployment set `REVIEWER_OPEN_SIGNUP=0` so only e-mails in `REVIEWER_EMAILS` can register as reviewers. `flask --app app set-role someone@example.com reviewer` changes an existing account.
 
 ### Demo script (3 minutes)
-1. Developer: create task → *Start work* → *Ready to provide proof* → add repo + write-up → *Submit*.
+1. Developer: create task → *Start work* → *Ready to provide proof* → add repo + write-up → choose reviewer (their username/e-mail) → *Submit*.
 2. Open "Demo: try an action the automaton should refuse", attempt `APPROVE` → blocked and logged.
-3. Reviewer: Review queue → *Begin review* → try to approve as the developer (refused) → approve/reject with reason.
-4. Show the audit trail "Integrity verified". Then tamper (below) and reload: "TAMPERING DETECTED".
+3. Reviewer (other browser): Review requests → open → *Begin review* → approve/reject with a reason. A different reviewer sees nothing.
+4. Developer: *Create public link* → open it logged-out: evidence, reviewer, integrity check.
+5. Tamper (below) and reload: "TAMPERING DETECTED" on both the task page and the public page.
 
 Tamper demo (sqlite3 shell on your local DB):
 ```sql
@@ -112,7 +117,8 @@ UPDATE state_transitions SET reason = 'edited' WHERE seq = 1;
 | `SECRET_KEY` | Session signing. **Required** when `POW_ENV=production` |
 | `POW_ENV` | `production` enables Secure cookies and the SECRET_KEY check |
 | `DATABASE_PATH` | SQLite file (default `database/pow_os.db`) |
-| `REVIEWER_EMAILS` | Comma-separated e-mails granted the reviewer role at signup/login |
+| `REVIEWER_OPEN_SIGNUP` | `1` (default) anyone may register as a reviewer; `0` restricts reviewer sign-up to `REVIEWER_EMAILS` |
+| `REVIEWER_EMAILS` | Comma-separated e-mails allowed to register as reviewers when open sign-up is off |
 | `PORT` | Used by `python app.py` |
 
 ## Tests
@@ -128,7 +134,8 @@ Tests use temporary databases and never touch `database/pow_os.db`. They cover t
 
 ## Known limitations / future work
 
-- Reviewers are designated by configuration; there is no admin UI or reviewer-assignment/reputation
+- **Trust in reviewers is the weak point.** Reviewer accounts are self-registered, so a developer could create a second account and approve themselves. The public page therefore shows the reviewer's name and says what "verified" does and does not mean; a recruiter decides how much to trust that reviewer. Stronger options (invitation-only reviewers, e-mail verification, domain/organisation checks) are future work
+- The reviewer for a submission cannot be changed after submitting; there is no reviewer reassignment, reminder or expiry
 - No automated checks of GitHub (repo exists, commit authorship); the completeness checklist is not verification
 - Hash chain is not externally anchored; no login rate-limiting or password reset; no file uploads
 - A public recruiter-facing profile of verified skills is not built; skills/`evidence_skills` tables exist but are unused

@@ -92,3 +92,15 @@ def test_duplicate_workflows_are_never_deleted_to_fit_a_constraint(tmp_path):
     conn = get_db_connection(path)
     assert conn.execute("SELECT COUNT(*) FROM workflow_instances WHERE task_id = 1").fetchone()[0] == 2
     conn.close()
+
+
+def test_migration_2_adds_reviewer_and_share_columns_without_touching_data(tmp_path):
+    path = str(tmp_path / "legacy.db")
+    build_legacy_database(path)
+    init_db(path)
+    conn = get_db_connection(path)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(workflow_instances)")}
+    assert {"reviewer_id", "share_token"} <= columns
+    assert conn.execute("SELECT COUNT(*) FROM workflow_instances WHERE reviewer_id IS NOT NULL").fetchone()[0] == 0
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_VERSION >= 2
+    conn.close()

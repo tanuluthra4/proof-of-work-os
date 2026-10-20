@@ -1,4 +1,5 @@
 import re
+import secrets
 from collections import OrderedDict
 
 from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
@@ -6,13 +7,14 @@ from flask import Blueprint, abort, flash, g, redirect, render_template, request
 from automata.states import WorkflowEvent, WorkflowState
 from automata.transitions import events_available_to, get_allowed_events
 from database.db import get_db_connection, transaction
-from routes.helpers import flash_errors, login_required, reviewer_required
+from routes.helpers import developer_required, flash_errors, login_required, reviewer_required
 from services.automata_engine import AutomataEngine, TransitionBlocked, WorkflowNotFound
 from services.evidence_service import (
     EVIDENCE_TYPES,
     EvidenceError,
     EvidenceNotAllowed,
     add_evidence,
+    assign_reviewer,
     delete_draft_evidence,
     list_evidence,
     score_evidence,
@@ -36,10 +38,12 @@ def _load_task(conn, task_id):
         SELECT t.id, t.user_id, t.project_id, t.title, t.description, t.status, t.priority,
                t.due_date, t.created_at, p.title AS project_title,
                w.id AS workflow_id, w.current_state, w.round, w.result,
-               w.completed_at AS decided_at, u.username AS owner_name
+               w.completed_at AS decided_at, w.reviewer_id, w.share_token,
+               u.username AS owner_name, rv.username AS reviewer_name
         FROM tasks t
         JOIN workflow_instances w ON w.task_id = t.id
         JOIN users u ON u.id = t.user_id
+        LEFT JOIN users rv ON rv.id = w.reviewer_id
         LEFT JOIN projects p ON p.id = t.project_id
         WHERE t.id = ?
         """,
@@ -53,7 +57,9 @@ def _access_for(task):
         return None
     if task["user_id"] == g.user["id"]:
         return "owner"
-    if g.user["role"] == "reviewer" and task["current_state"] in REVIEWER_VISIBLE:
+    # A reviewer only ever sees evidence that was sent to *them*.
+    if (g.user["role"] == "reviewer" and task["reviewer_id"] == g.user["id"]
+            and task["current_state"] in REVIEWER_VISIBLE):
         return "reviewer"
     return None
 
@@ -120,7 +126,7 @@ def _redirect_after_event():
 
 # -------------------------------------------------------------- create/edit
 @tasks_bp.route("/add-task", methods=["GET", "POST"])
-@login_required
+@developer_required
 def add_task():
     conn = get_db_connection()
     try:
@@ -156,11 +162,11 @@ def add_task():
 
 
 @tasks_bp.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"])
-@login_required
+@developer_required
 def edit_task(task_id):
     conn = get_db_connection()
     try:
-        task = dict(_owned_task_or_404(conn, task_id))
+        task = _owned_task_or_404(conn, task_id)
         if task["current_state"] in LOCKED_FOR_EDIT:
             flash("This task is locked while its evidence is under review or after verification.",
                   "error")
@@ -194,7 +200,7 @@ def edit_task(task_id):
 
 
 @tasks_bp.route("/tasks/<int:task_id>/delete", methods=["POST"])
-@login_required
+@developer_required
 def delete_task(task_id):
     conn = get_db_connection()
     try:
@@ -211,7 +217,7 @@ def delete_task(task_id):
 
 
 @tasks_bp.route("/tasks/<int:task_id>/complete", methods=["POST"])
-@login_required
+@developer_required
 def complete_task(task_id):
     """Self-reported completion. It does NOT verify anything."""
     conn = get_db_connection()
@@ -282,6 +288,10 @@ def task_detail(task_id):
             evidence_types=EVIDENCE_TYPES,
             can_add_evidence=is_owner and state == WorkflowState.EVIDENCE_REQUIRED,
             can_edit=is_owner and task["current_state"] not in LOCKED_FOR_EDIT,
+            can_assign=is_owner and (state == WorkflowState.EVIDENCE_REQUIRED or (
+                state == WorkflowState.EVIDENCE_SUBMITTED and task["reviewer_id"] is None)),
+            share_url=(url_for("public.proof", token=task["share_token"], _external=True)
+                       if task["share_token"] else None),
         )
     finally:
         conn.close()
@@ -315,7 +325,7 @@ def fire_event(task_id, event_name):
 
 # ---------------------------------------------------------------- evidence
 @tasks_bp.route("/tasks/<int:task_id>/evidence", methods=["POST"])
-@login_required
+@developer_required
 def submit_evidence_item(task_id):
     conn = get_db_connection()
     try:
@@ -341,7 +351,7 @@ def submit_evidence_item(task_id):
 
 
 @tasks_bp.route("/tasks/<int:task_id>/evidence/<int:evidence_id>/delete", methods=["POST"])
-@login_required
+@developer_required
 def remove_evidence_item(task_id, evidence_id):
     conn = get_db_connection()
     try:
@@ -356,16 +366,71 @@ def remove_evidence_item(task_id, evidence_id):
     return redirect(url_for("tasks.task_detail", task_id=task_id))
 
 
+# ------------------------------------------------- reviewer + sharing
+@tasks_bp.route("/tasks/<int:task_id>/reviewer", methods=["POST"])
+@developer_required
+def choose_reviewer(task_id):
+    conn = get_db_connection()
+    try:
+        task = _owned_task_or_404(conn, task_id)
+        try:
+            name = assign_reviewer(conn, task["workflow_id"], g.user["id"],
+                                   request.form.get("reviewer"))
+            flash(f"Evidence will be sent to reviewer {name}.", "success")
+        except EvidenceError as error:
+            flash_errors(error.problems)
+        except EvidenceNotAllowed as error:
+            flash(str(error), "error")
+    finally:
+        conn.close()
+    return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+
+@tasks_bp.route("/tasks/<int:task_id>/share", methods=["POST"])
+@developer_required
+def share_task(task_id):
+    """Create a public, read-only link to a VERIFIED proof (private until you do this)."""
+    conn = get_db_connection()
+    try:
+        task = _owned_task_or_404(conn, task_id)
+        if task["current_state"] != "VERIFIED":
+            flash("Only verified proofs can be shared.", "error")
+        else:
+            with transaction(conn):
+                conn.execute(
+                    "UPDATE workflow_instances SET share_token = COALESCE(share_token, ?) WHERE id = ?",
+                    (secrets.token_urlsafe(18), task["workflow_id"]),
+                )
+            flash("Public link created. Anyone with the link can view this verified proof.", "success")
+    finally:
+        conn.close()
+    return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+
+@tasks_bp.route("/tasks/<int:task_id>/unshare", methods=["POST"])
+@developer_required
+def unshare_task(task_id):
+    conn = get_db_connection()
+    try:
+        task = _owned_task_or_404(conn, task_id)
+        with transaction(conn):
+            conn.execute("UPDATE workflow_instances SET share_token = NULL WHERE id = ?",
+                         (task["workflow_id"],))
+        flash("Public link disabled.", "success")
+    finally:
+        conn.close()
+    return redirect(url_for("tasks.task_detail", task_id=task_id))
+
+
 # ------------------------------------------------------------ review queue
 @tasks_bp.route("/review")
 @reviewer_required
 def review_queue():
     conn = get_db_connection()
     try:
-        queue = conn.execute(
-            """
+        base = """
             SELECT t.id AS task_id, t.title, u.username AS owner_name, w.current_state,
-                   w.round,
+                   w.round, w.result, w.completed_at AS decided_at,
                    (SELECT COUNT(*) FROM evidence e
                      WHERE e.workflow_id = w.id AND e.round = w.round) AS evidence_count,
                    (SELECT MAX(created_at) FROM state_transitions s
@@ -373,11 +438,12 @@ def review_queue():
             FROM workflow_instances w
             JOIN tasks t ON t.id = w.task_id
             JOIN users u ON u.id = w.user_id
-            WHERE w.user_id != ? AND w.current_state IN ('EVIDENCE_SUBMITTED', 'VALIDATING')
-            ORDER BY last_change ASC
-            """,
-            (g.user["id"],),
-        ).fetchall()
+            WHERE w.reviewer_id = ? AND w.user_id != ? AND w.current_state IN (%s)
+            ORDER BY last_change %s
+        """
+        me = g.user["id"]
+        queue = conn.execute(base % ("'EVIDENCE_SUBMITTED', 'VALIDATING'", "ASC"), (me, me)).fetchall()
+        decided = conn.execute(base % ("'VERIFIED', 'REJECTED'", "DESC"), (me, me)).fetchall()
     finally:
         conn.close()
-    return render_template("review_queue.html", queue=queue, state_labels=STATE_LABELS)
+    return render_template("review_queue.html", queue=queue, decided=decided)
