@@ -2,7 +2,7 @@
 
 **An automata-based evidence verification system for developer skills.**
 
-Live deployment (previous version): https://proof-of-work-os.onrender.com — redeploy to get this version.
+Live deployment: https://proof-of-work-os.onrender.com
 
 ## Problem
 
