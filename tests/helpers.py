@@ -2,7 +2,7 @@
 from automata.states import WorkflowEvent as E
 from database.db import get_db_connection, transaction
 from services.automata_engine import AutomataEngine
-from services.evidence_service import add_evidence, assign_reviewer
+from services.evidence_service import add_evidence, assign_reviewers
 
 engine = AutomataEngine()
 
@@ -27,9 +27,9 @@ def make_task(app, user_id, title="Build an API"):
     return task_id, workflow_id
 
 
-def fire(app, workflow_id, event, actor_id, reason=None):
+def fire(app, workflow_id, event, actor_id, reason=None, extra=None):
     with app.app_context():
-        return engine.transition(workflow_id, event, actor_id, reason)
+        return engine.transition(workflow_id, event, actor_id, reason, extra)
 
 
 def add_evidence_item(app, workflow_id, user_id, kind="github_repo",
@@ -42,15 +42,24 @@ def add_evidence_item(app, workflow_id, user_id, kind="github_repo",
             conn.close()
 
 
-def assign(app, workflow_id, owner_id, reviewer_id):
-    """Send the workflow's evidence to a reviewer (by username), as the owner."""
-    name = query(app, "SELECT username FROM users WHERE id = ?", (reviewer_id,))[0][0]
+def assign(app, workflow_id, owner_id, reviewer_id, required=1):
+    """Assign ONE reviewer (by id) with a 1-of-1 policy unless told otherwise."""
+    return assign_many(app, workflow_id, owner_id, [reviewer_id], required)
+
+
+def assign_many(app, workflow_id, owner_id, reviewer_ids, required):
+    names = [query(app, "SELECT username FROM users WHERE id = ?", (r,))[0][0] for r in reviewer_ids]
     with app.app_context():
         conn = get_db_connection()
         try:
-            return assign_reviewer(conn, workflow_id, owner_id, name)
+            return assign_reviewers(conn, workflow_id, owner_id, names, required)
         finally:
             conn.close()
+
+
+def vote(app, workflow_id, reviewer_id, approve=True, notes="Looks consistent with the claim.", **extra):
+    event = E.VOTE_APPROVE if approve else E.VOTE_REJECT
+    return fire(app, workflow_id, event, reviewer_id, notes, extra or None)
 
 
 def advance_to_evidence_required(app, workflow_id, owner_id):
@@ -58,12 +67,14 @@ def advance_to_evidence_required(app, workflow_id, owner_id):
     fire(app, workflow_id, E.REQUEST_EVIDENCE, owner_id)
 
 
-def advance_to_validating(app, workflow_id, owner_id, reviewer_id):
+def advance_to_validating(app, workflow_id, owner_id, reviewer_id, required=1):
+    """reviewer_id may be one id or a list of ids; the first reviewer starts the review."""
+    ids = reviewer_id if isinstance(reviewer_id, (list, tuple)) else [reviewer_id]
     advance_to_evidence_required(app, workflow_id, owner_id)
     add_evidence_item(app, workflow_id, owner_id)
-    assign(app, workflow_id, owner_id, reviewer_id)
+    assign_many(app, workflow_id, owner_id, ids, required)
     fire(app, workflow_id, E.SUBMIT_EVIDENCE, owner_id)
-    fire(app, workflow_id, E.START_VALIDATION, reviewer_id)
+    fire(app, workflow_id, E.START_VALIDATION, ids[0])
 
 
 def query(app, sql, params=()):

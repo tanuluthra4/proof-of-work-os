@@ -3,7 +3,7 @@ import os
 import secrets
 
 import click
-from flask import Flask, g, render_template, request, session
+from flask import Flask, Response, g, render_template, request, session
 
 from config import Config
 from database.db import get_db_connection, transaction
@@ -57,7 +57,19 @@ def create_app(test_config=None):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        # Only the landing page is indexable; every account/proof page is private.
+        if request.path not in ("/", "/robots.txt") and not request.path.startswith("/static/"):
+            response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
         return response
+
+    @app.route("/robots.txt")
+    def robots_txt():
+        body = "User-agent: *\nAllow: /$\nDisallow: /\n"
+        return Response(body, mimetype="text/plain")
+
+    @app.route("/favicon.ico")
+    def favicon():
+        return app.send_static_file("favicon.svg")
 
     @app.context_processor
     def inject_user():

@@ -6,7 +6,7 @@ state-diagram visualisation all read from `TRANSITIONS`.
 
 Formally the machine is a deterministic finite automaton M = (Q, Sigma, delta, q0, F):
     Q      = the seven WorkflowState values
-    Sigma  = the seven WorkflowEvent values
+    Sigma  = the eleven WorkflowEvent values (two are reviewer votes)
     delta  = TRANSITIONS (a *partial* function: undefined moves are rejected)
     q0     = CREATED
     F      = {VERIFIED}   (accepting state: the proof was approved)
@@ -28,8 +28,17 @@ TRANSITIONS = {
     },
     WorkflowState.EVIDENCE_SUBMITTED: {
         WorkflowEvent.START_VALIDATION: WorkflowState.VALIDATING,
+        WorkflowEvent.REASSIGN_REVIEWER: WorkflowState.EVIDENCE_SUBMITTED,
+        WorkflowEvent.WITHDRAW: WorkflowState.IN_PROGRESS,
     },
     WorkflowState.VALIDATING: {
+        # Votes are self-loops: each is recorded (and hash-chained) without
+        # leaving VALIDATING. APPROVE / REJECT are then fired by the engine the
+        # moment the votes decide the outcome; no person can fire them.
+        WorkflowEvent.VOTE_APPROVE: WorkflowState.VALIDATING,
+        WorkflowEvent.VOTE_REJECT: WorkflowState.VALIDATING,
+        WorkflowEvent.REASSIGN_REVIEWER: WorkflowState.VALIDATING,
+        WorkflowEvent.WITHDRAW: WorkflowState.IN_PROGRESS,
         WorkflowEvent.APPROVE: WorkflowState.VERIFIED,
         WorkflowEvent.REJECT: WorkflowState.REJECTED,
     },
@@ -39,15 +48,21 @@ TRANSITIONS = {
     },
 }
 
-# Who may fire each event. The owner drives the work; only a reviewer
-# (who is not the owner) may open a review or decide it.
+# Who may fire each event. The owner drives the work; only reviewers assigned
+# to the submission (never its owner) may open a review and vote. The final
+# decision is SYSTEM: nobody can declare a task verified; it follows from the
+# votes and the sealed approval policy.
 REQUIRED_ACTOR = {
     WorkflowEvent.START: Actor.OWNER,
     WorkflowEvent.REQUEST_EVIDENCE: Actor.OWNER,
     WorkflowEvent.SUBMIT_EVIDENCE: Actor.OWNER,
     WorkflowEvent.START_VALIDATION: Actor.REVIEWER,
-    WorkflowEvent.APPROVE: Actor.REVIEWER,
-    WorkflowEvent.REJECT: Actor.REVIEWER,
+    WorkflowEvent.VOTE_APPROVE: Actor.REVIEWER,
+    WorkflowEvent.VOTE_REJECT: Actor.REVIEWER,
+    WorkflowEvent.APPROVE: Actor.SYSTEM,
+    WorkflowEvent.REJECT: Actor.SYSTEM,
+    WorkflowEvent.REASSIGN_REVIEWER: Actor.OWNER,
+    WorkflowEvent.WITHDRAW: Actor.OWNER,
     WorkflowEvent.RESTART: Actor.OWNER,
 }
 

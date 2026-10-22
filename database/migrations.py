@@ -192,9 +192,93 @@ def _migration_2(conn):
     )
 
 
+def _migration_3(conn):
+    """Multiple independent reviewers, an approval policy, per-reviewer decisions.
+
+    * review_assignments - one row per (workflow, round, reviewer); status keeps
+      cancelled/reassigned reviewers in the record instead of deleting them.
+    * review_decisions   - one immutable row per reviewer decision, pinned to the
+      evidence digest (version) that reviewer actually saw.
+    * workflow_instances.required_approvals - the approval policy (k of n).
+    * state_transitions.meta - JSON sealed into the hash chain (reviewer policy,
+      reassignment details, note digests).
+    Nothing is dropped; no historical decision is invented.
+    """
+    _add_column(conn, "state_transitions", "meta TEXT")
+    _add_column(conn, "workflow_instances", "required_approvals INTEGER NOT NULL DEFAULT 1")
+    _add_column(conn, "workflow_instances", "share_revoked_at TIMESTAMP")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_id INTEGER NOT NULL,
+            round INTEGER NOT NULL,
+            reviewer_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'assigned'
+                CHECK (status IN ('assigned', 'cancelled')),
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            cancelled_at TIMESTAMP,
+            UNIQUE (workflow_id, round, reviewer_id),
+            FOREIGN KEY (workflow_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_id INTEGER NOT NULL,
+            round INTEGER NOT NULL,
+            reviewer_id INTEGER NOT NULL,
+            decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject')),
+            notes TEXT NOT NULL,
+            private_notes TEXT,
+            note_public INTEGER NOT NULL DEFAULT 0 CHECK (note_public IN (0, 1)),
+            evidence_digest TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (workflow_id, round, reviewer_id),
+            FOREIGN KEY (workflow_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_assign_reviewer ON review_assignments(reviewer_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_workflow ON review_decisions(workflow_id, round)")
+
+    # Carry over single-reviewer assignments (migration 2). Decisions are NOT backfilled:
+    # earlier approvals/rejections stay exactly where they were, in the hash chain.
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO review_assignments (workflow_id, round, reviewer_id)
+        SELECT id, round, reviewer_id FROM workflow_instances WHERE reviewer_id IS NOT NULL
+        """
+    )
+
+    # Decisions are append-only at the database level (their parent workflow may
+    # still be deleted, which cascades).
+    conn.execute("DROP TRIGGER IF EXISTS review_decisions_no_update")
+    conn.execute(
+        """
+        CREATE TRIGGER review_decisions_no_update BEFORE UPDATE ON review_decisions
+        BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END
+        """
+    )
+    conn.execute("DROP TRIGGER IF EXISTS review_decisions_no_delete")
+    conn.execute(
+        """
+        CREATE TRIGGER review_decisions_no_delete BEFORE DELETE ON review_decisions
+        WHEN EXISTS (SELECT 1 FROM workflow_instances WHERE id = OLD.workflow_id)
+        BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END
+        """
+    )
+
+
 MIGRATIONS = [
     (1, _migration_1),
     (2, _migration_2),
+    (3, _migration_3),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

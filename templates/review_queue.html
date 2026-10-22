@@ -5,14 +5,14 @@
 <div class="page-head">
     <div>
         <h1>Review requests</h1>
-        <p>You only see evidence that a developer sent to <b>you</b>. You can never review your own work.</p>
+        <p>You only see evidence that a developer assigned to <b>you</b>. Other reviewers&rsquo; decisions stay hidden until you decide. You can never review your own work.</p>
     </div>
 </div>
 <div class="card">
     <h2>Awaiting your review</h2>
     {% if queue %}
     <table class="queue">
-        <thead><tr><th>Task</th><th>Developer</th><th>State</th><th>Evidence items</th><th>Waiting since</th><th></th></tr></thead>
+        <thead><tr><th>Task</th><th>Developer</th><th>State</th><th>Evidence items</th><th>Progress</th><th>Waiting since</th><th></th></tr></thead>
         <tbody>
         {% for item in queue %}
         <tr>
@@ -20,6 +20,7 @@
             <td>{{ item['owner_name'] }}</td>
             <td>{{ state_pill(item['current_state'], item['current_state'].replace('_', ' ').title()) }}</td>
             <td>{{ item['evidence_count'] }}</td>
+            <td>{{ item['decided_count'] }} of {{ item['reviewer_count'] }} decided; {{ item['required_approvals'] }} approvals needed{% if item['my_decisions'] %} <span class="pill ok">you decided</span>{% endif %}</td>
             <td class="muted small">{{ item['last_change'] }} UTC</td>
             <td><a class="btn btn-primary btn-sm" href="{{ url_for('tasks.task_detail', task_id=item['task_id']) }}">Open</a></td>
         </tr>
@@ -27,7 +28,7 @@
         </tbody>
     </table>
     {% else %}
-    <div class="empty"><h3>Nothing to review</h3><p>When a developer sends you evidence for verification it will appear here. Share your username or e-mail with them so they can choose you.</p></div>
+    <div class="empty"><h3>Nothing to review</h3><p>When a developer sends you evidence for verification it will appear here. Share your username or e-mail with them so they can assign you.</p></div>
     {% endif %}
 </div>
 <div class="card">

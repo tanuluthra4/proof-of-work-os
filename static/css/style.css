@@ -5,7 +5,7 @@
     --surface-2: #f8fafc;
     --border: #e2e8f0;
     --text: #0f172a;
-    --muted: #64748b;
+    --muted: #56637a;
     --accent: #4f46e5;
     --accent-soft: #eef2ff;
     --good: #15803d;
@@ -96,7 +96,7 @@ input, select, textarea {
     border: 1px solid var(--border); border-radius: 10px;
 }
 textarea { min-height: 90px; resize: vertical; }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .hint { font-size: .8rem; color: var(--muted); margin: -8px 0 14px; }
 
 .btn, button {
@@ -168,16 +168,16 @@ svg.fsm { width: 100%; min-width: 640px; height: auto; display: block; }
 .fsm .node.good.current rect { fill: var(--good); stroke: var(--good); }
 .fsm .node.bad.current rect { fill: var(--bad); stroke: var(--bad); }
 .fsm .node.accepting rect { stroke-width: 3; }
-.fsm .edge line { stroke: var(--border); stroke-width: 1.6; }
-.fsm .edge text { fill: var(--muted); font-family: var(--mono); font-size: 10px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
-.fsm .edge.traversed line { stroke: var(--accent); stroke-width: 2.4; }
+.fsm .edge path { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.fsm .edge text { fill: var(--muted); font-family: var(--mono); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
+.fsm .edge.traversed path { stroke: var(--accent); stroke-width: 2.4; }
 .fsm .edge.traversed text { fill: var(--accent); }
-.fsm .edge.available line { stroke: var(--good); stroke-width: 2.6; stroke-dasharray: 6 4; animation: dash 1s linear infinite; }
+.fsm .edge.available path { stroke: var(--good); stroke-width: 2.6; stroke-dasharray: 6 4; animation: dash 1s linear infinite; }
 .fsm .edge.available text { fill: var(--good); font-weight: 700; }
-.fsm .edge.waiting line { stroke: var(--warn); stroke-width: 2; stroke-dasharray: 3 4; }
+.fsm .edge.waiting path { stroke: var(--warn); stroke-width: 2; stroke-dasharray: 3 4; }
 .fsm .edge.waiting text { fill: var(--warn); }
 @keyframes dash { to { stroke-dashoffset: -20; } }
-@media (prefers-reduced-motion: reduce) { .fsm .edge.available line { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .fsm .edge.available path { animation: none; } }
 .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8rem; color: var(--muted); margin-top: 10px; }
 .legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 6px; }
 .legend .l-trav { border-color: var(--accent); }
@@ -247,3 +247,24 @@ table.queue { width: 100%; border-collapse: collapse; }
 .portal-heading { margin-bottom: 20px; }
 .portal-heading h2 { margin: 10px 0 4px; }
 @media (max-width: 680px) { .role-grid { grid-template-columns: 1fr; } .role-card > p:not(.eyebrow):not(.role-footnote) { min-height: 0; } .welcome-page { padding-top: 42px; } }
+
+/* --- accessibility & multi-reviewer additions --- */
+.skip-link { position: absolute; left: 8px; top: -48px; background: var(--accent); color: #fff; padding: 8px 14px; border-radius: 8px; z-index: 100; }
+.skip-link:focus { top: 8px; }
+.panel-list { list-style: none; display: grid; gap: 10px; }
+.panel-list li { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.check-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.check-row input { width: auto; margin: 0; }
+.narrow-card { max-width: 560px; margin: 40px auto; }
+.score { font-size: 1.6rem; font-weight: 700; }
+.site-footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 20px 16px; color: var(--muted); font-size: .85rem; }
+.site-footer a { margin-right: 14px; }
+.info-section { max-width: 920px; margin: 40px auto; padding: 0 16px; }
+.info-section h2 { font-size: 1.4rem; margin-bottom: 12px; }
+.steps { display: grid; gap: 12px; margin: 0; padding-left: 22px; }
+.faq details { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--surface); }
+.faq summary { cursor: pointer; font-weight: 600; }
+.landing-nav { display: flex; gap: 18px; justify-content: center; padding: 14px 16px; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+.hash, .evidence-item a, .evidence-item p, .reason { overflow-wrap: anywhere; word-break: break-word; }
+.kv { flex-wrap: wrap; }

@@ -1,7 +1,19 @@
 {% extends 'base.html' %}
-{% block title %}Welcome{% endblock %}
+{% block title %}Verified developer proof{% endblock %}
+{% block meta %}<meta name="description" content="Proof-of-Work OS helps developers submit work evidence, get skills reviewed, and share verified proof with recruiters.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Proof-of-Work OS">
+    <meta property="og:description" content="Proof-of-Work OS helps developers submit work evidence, get skills reviewed, and share verified proof with recruiters.">
+    {% if config.PUBLIC_BASE_URL %}<link rel="canonical" href="{{ config.PUBLIC_BASE_URL }}/">
+    <meta property="og:url" content="{{ config.PUBLIC_BASE_URL }}/">{% endif %}{% endblock %}
 {% block body %}
-<main class="welcome-page">
+<nav class="landing-nav" aria-label="Page sections">
+    <a href="#how-it-works">How it works</a>
+    <a href="#verification">Verification process</a>
+    <a href="#faq">FAQ</a>
+    <a href="{{ url_for('auth.login', role='developer') }}">Log in</a>
+</nav>
+<main class="welcome-page" id="main">
     <div class="welcome-brand">
         <span class="brand-mark" aria-hidden="true">P</span>
         <p class="eyebrow">PROOF-OF-WORK OS</p>
@@ -31,4 +43,36 @@
 
     <p class="welcome-security"><span aria-hidden="true">⌁</span> Your role is fixed when you create the account, and is checked on every sign-in.</p>
 </main>
+
+<section class="info-section" id="how-it-works" aria-labelledby="how-h">
+    <h2 id="how-h">How it works</h2>
+    <ol class="steps">
+        <li><b>Create a task and attach evidence.</b> Repository links, demos, pull requests, write-ups.</li>
+        <li><b>Choose your reviewers.</b> Pick one to five reviewer accounts and how many must approve (for example 2 of 3).</li>
+        <li><b>Reviewers decide independently.</b> Each records approve or reject with a written note. They cannot see each other&rsquo;s decisions until they have decided.</li>
+        <li><b>Share the result.</b> A verified proof can be shared by a private link that you can revoke at any time.</li>
+    </ol>
+</section>
+
+<section class="info-section" id="verification" aria-labelledby="ver-h">
+    <h2 id="ver-h">Verification process</h2>
+    <p>Every proof moves through a fixed state machine: created, in progress, evidence required, evidence submitted, under review, then verified or rejected. The server refuses any step that is not allowed and records the refusal. A proof becomes <b>verified</b> only when the required number of distinct reviewers approve; it is <b>rejected</b> as soon as that number can no longer be reached. Changing evidence starts a new review round, and earlier decisions stay in the history.</p>
+    <p class="muted small" style="margin-top:8px">The history is hash-chained, so later edits are detectable (tamper-evident, not tamper-proof).</p>
+</section>
+
+<section class="info-section faq" id="faq" aria-labelledby="faq-h">
+    <h2 id="faq-h">FAQ</h2>
+    <details><summary>Does &ldquo;verified&rdquo; mean an organisation certified the developer?</summary><p>No. It means the named reviewer accounts approved the submitted evidence. Reviewer identity and expertise are not independently verified, and several reviewers are not an organisation.</p></details>
+    <details><summary>Can a developer approve their own work?</summary><p>No. Reviewers must be other reviewer accounts, and reviewer sign-up is invitation-only.</p></details>
+    <details><summary>Who can see my proof?</summary><p>Only you and your assigned reviewers, unless you create a public link. Public pages show reviewer usernames, decisions and notes the reviewer marked public, never e-mails or private notes.</p></details>
+    <details><summary>What if I change my evidence after submitting?</summary><p>Withdraw the submission. A new round starts and earlier approvals no longer count, but they stay in the history.</p></details>
+    <details><summary>Is the audit trail tamper-proof?</summary><p>No, it is tamper-evident. Anyone with database access could rewrite it and its hashes together; the check detects ordinary edits and inconsistencies.</p></details>
+</section>
+
+<footer class="site-footer">
+    <a href="https://github.com/tanuluthra4/proof-of-work-os" rel="noopener noreferrer">Source on GitHub</a>
+    <a href="#how-it-works">How it works</a>
+    <a href="#faq">FAQ</a>
+    <span>Proof-of-Work OS</span>
+</footer>
 {% endblock %}

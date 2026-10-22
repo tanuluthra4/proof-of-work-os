@@ -2,7 +2,7 @@ import re
 import secrets
 from collections import OrderedDict
 
-from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
 
 from automata.states import WorkflowEvent, WorkflowState
 from automata.transitions import events_available_to, get_allowed_events
@@ -14,12 +14,13 @@ from services.evidence_service import (
     EvidenceError,
     EvidenceNotAllowed,
     add_evidence,
-    assign_reviewer,
+    assign_reviewers,
     delete_draft_evidence,
     list_evidence,
     score_evidence,
 )
 from services.fsm_view import EVENT_LABELS, STATE_LABELS, build_fsm_view
+from services.review_service import review_panel, tally
 
 tasks_bp = Blueprint("tasks", __name__)
 engine = AutomataEngine()
@@ -38,12 +39,11 @@ def _load_task(conn, task_id):
         SELECT t.id, t.user_id, t.project_id, t.title, t.description, t.status, t.priority,
                t.due_date, t.created_at, p.title AS project_title,
                w.id AS workflow_id, w.current_state, w.round, w.result,
-               w.completed_at AS decided_at, w.reviewer_id, w.share_token,
-               u.username AS owner_name, rv.username AS reviewer_name
+               w.completed_at AS decided_at, w.share_token, w.share_revoked_at,
+               w.required_approvals, u.username AS owner_name
         FROM tasks t
         JOIN workflow_instances w ON w.task_id = t.id
         JOIN users u ON u.id = t.user_id
-        LEFT JOIN users rv ON rv.id = w.reviewer_id
         LEFT JOIN projects p ON p.id = t.project_id
         WHERE t.id = ?
         """,
@@ -51,16 +51,21 @@ def _load_task(conn, task_id):
     ).fetchone()
 
 
-def _access_for(task):
+def _access_for(conn, task):
     """'owner', 'reviewer' or None. None must look like a 404 to the caller."""
     if task is None:
         return None
     if task["user_id"] == g.user["id"]:
         return "owner"
-    # A reviewer only ever sees evidence that was sent to *them*.
-    if (g.user["role"] == "reviewer" and task["reviewer_id"] == g.user["id"]
-            and task["current_state"] in REVIEWER_VISIBLE):
-        return "reviewer"
+    # A reviewer only ever sees evidence that was assigned to *them* for the current round.
+    if g.user["role"] == "reviewer" and task["current_state"] in REVIEWER_VISIBLE:
+        assigned = conn.execute(
+            "SELECT 1 FROM review_assignments WHERE workflow_id = ? AND round = ? "
+            "AND reviewer_id = ? AND status = 'assigned'",
+            (task["workflow_id"], task["round"], g.user["id"]),
+        ).fetchone()
+        if assigned:
+            return "reviewer"
     return None
 
 
@@ -243,7 +248,7 @@ def task_detail(task_id):
     conn = get_db_connection()
     try:
         task = _load_task(conn, task_id)
-        access = _access_for(task)
+        access = _access_for(conn, task)
         if access is None:
             abort(404)
 
@@ -251,22 +256,49 @@ def task_detail(task_id):
         is_reviewer = access == "reviewer"
         state = WorkflowState(task["current_state"])
         workflow_id = task["workflow_id"]
+        closed = task["current_state"] in ("VERIFIED", "REJECTED")
+
+        panel = review_panel(conn, workflow_id, task["round"], g.user["id"], is_owner,
+                             task["current_state"])
+        active = [r for r in panel if r["status"] == "assigned"]
+        me = next((r for r in panel if r["is_me"]), None)
+        my_decided = bool(me and me["decided"])
+        decisions_visible = is_owner or closed or my_decided
+        approvals, rejections, total = tally(panel)
+        decided_count = sum(1 for r in active if r["decided"])
 
         history = engine.get_history(workflow_id)
+        if is_reviewer and not decisions_visible:
+            # Independence: other reviewers' decisions stay hidden until you have decided.
+            history = [
+                {**dict(h), "event": "VOTE (hidden until you decide)", "reason": None}
+                if h["event"] in ("VOTE_APPROVE", "VOTE_REJECT") else h
+                for h in history
+            ]
         actions = events_available_to(state, is_owner, is_reviewer)
+        if my_decided:
+            actions = [e for e in actions if e not in (WorkflowEvent.VOTE_APPROVE,
+                                                       WorkflowEvent.VOTE_REJECT)]
+        # Owner-only maintenance actions are offered through dedicated forms, not generic buttons.
+        actions = [e for e in actions if e not in (WorkflowEvent.REASSIGN_REVIEWER,
+                                                   WorkflowEvent.WITHDRAW)]
         fsm = build_fsm_view(task["current_state"], history, actions)
 
         evidence_by_round = OrderedDict()
         for item in list_evidence(conn, workflow_id):
+            if is_reviewer and item["round"] != task["round"]:
+                continue        # reviewers see only the evidence version assigned to them
             evidence_by_round.setdefault(item["round"], []).append(item)
         current_round_items = evidence_by_round.get(task["round"], [])
         # While REJECTED the round counter has not advanced yet, so the rejected
-        # submission is still "current"; after RESTART a new empty round starts.
+        # submission is still "current"; after RESTART/WITHDRAW a new round starts.
         scored_items = current_round_items or (
             next(iter(evidence_by_round.values()), []) if evidence_by_round else []
         )
 
         probe_events = [e for e in WorkflowEvent if e not in get_allowed_events(state)]
+        in_review = task["current_state"] in ("EVIDENCE_SUBMITTED", "VALIDATING")
+        share_active = bool(task["share_token"]) and not task["share_revoked_at"]
 
         return render_template(
             "task_detail.html",
@@ -280,18 +312,28 @@ def task_detail(task_id):
             probe_events=probe_events,
             fsm=fsm,
             history=history,
-            blocked=engine.get_blocked_actions(workflow_id),
+            blocked=engine.get_blocked_actions(workflow_id) if is_owner else [],
             chain=engine.verify_history(workflow_id),
             evidence_by_round=evidence_by_round,
             current_round=task["round"],
             evidence_score=score_evidence(scored_items),
             evidence_types=EVIDENCE_TYPES,
+            panel=panel,
+            active_reviewers=active,
+            my_decided=my_decided,
+            decisions_visible=decisions_visible,
+            approvals=approvals, rejections=rejections, total=total,
+            decided_count=decided_count,
             can_add_evidence=is_owner and state == WorkflowState.EVIDENCE_REQUIRED,
             can_edit=is_owner and task["current_state"] not in LOCKED_FOR_EDIT,
             can_assign=is_owner and (state == WorkflowState.EVIDENCE_REQUIRED or (
-                state == WorkflowState.EVIDENCE_SUBMITTED and task["reviewer_id"] is None)),
+                state == WorkflowState.EVIDENCE_SUBMITTED and not active)),
+            can_reassign=is_owner and in_review and any(not r["decided"] for r in active),
+            can_withdraw=is_owner and in_review,
+            default_required=current_app.config["DEFAULT_REQUIRED_APPROVALS"],
             share_url=(url_for("public.proof", token=task["share_token"], _external=True)
-                       if task["share_token"] else None),
+                       if share_active else None),
+            share_revoked=bool(task["share_token"]) and bool(task["share_revoked_at"]),
         )
     finally:
         conn.close()
@@ -304,14 +346,20 @@ def fire_event(task_id, event_name):
     conn = get_db_connection()
     try:
         task = _load_task(conn, task_id)
-        if _access_for(task) is None:
+        if _access_for(conn, task) is None:
             abort(404)
     finally:
         conn.close()
 
+    extra = {
+        "private_notes": request.form.get("private_notes"),
+        "note_public": request.form.get("note_public") == "1",
+        "remove": request.form.get("remove"),
+        "add": request.form.get("add"),
+    }
     try:
         result = engine.transition(
-            task["workflow_id"], event_name, g.user["id"], request.form.get("reason")
+            task["workflow_id"], event_name, g.user["id"], request.form.get("reason"), extra
         )
         label = EVENT_LABELS.get(WorkflowEvent(result["event"]), result["event"])
         flash(f"{label}: {result['from_state']} → {result['to_state']}.", "success")
@@ -374,9 +422,12 @@ def choose_reviewer(task_id):
     try:
         task = _owned_task_or_404(conn, task_id)
         try:
-            name = assign_reviewer(conn, task["workflow_id"], g.user["id"],
-                                   request.form.get("reviewer"))
-            flash(f"Evidence will be sent to reviewer {name}.", "success")
+            names, required = assign_reviewers(
+                conn, task["workflow_id"], g.user["id"],
+                request.form.get("reviewers"), request.form.get("required"),
+            )
+            flash(f"Evidence will be sent to {', '.join(names)}; "
+                  f"{required} of {len(names)} must approve.", "success")
         except EvidenceError as error:
             flash_errors(error.problems)
         except EvidenceNotAllowed as error:
@@ -397,9 +448,16 @@ def share_task(task_id):
             flash("Only verified proofs can be shared.", "error")
         else:
             with transaction(conn):
+                # An active link is kept; a revoked one is replaced by a brand-new token.
                 conn.execute(
-                    "UPDATE workflow_instances SET share_token = COALESCE(share_token, ?) WHERE id = ?",
-                    (secrets.token_urlsafe(18), task["workflow_id"]),
+                    """
+                    UPDATE workflow_instances
+                    SET share_token = CASE WHEN share_token IS NULL OR share_revoked_at IS NOT NULL
+                                           THEN ? ELSE share_token END,
+                        share_revoked_at = NULL
+                    WHERE id = ?
+                    """,
+                    (secrets.token_urlsafe(24), task["workflow_id"]),
                 )
             flash("Public link created. Anyone with the link can view this verified proof.", "success")
     finally:
@@ -410,13 +468,17 @@ def share_task(task_id):
 @tasks_bp.route("/tasks/<int:task_id>/unshare", methods=["POST"])
 @developer_required
 def unshare_task(task_id):
+    """Revoke the public link: it stops exposing the proof and says it was revoked."""
     conn = get_db_connection()
     try:
         task = _owned_task_or_404(conn, task_id)
         with transaction(conn):
-            conn.execute("UPDATE workflow_instances SET share_token = NULL WHERE id = ?",
-                         (task["workflow_id"],))
-        flash("Public link disabled.", "success")
+            conn.execute(
+                "UPDATE workflow_instances SET share_revoked_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND share_token IS NOT NULL AND share_revoked_at IS NULL",
+                (task["workflow_id"],),
+            )
+        flash("Public link revoked. It no longer shows this proof.", "success")
     finally:
         conn.close()
     return redirect(url_for("tasks.task_detail", task_id=task_id))
@@ -430,20 +492,30 @@ def review_queue():
     try:
         base = """
             SELECT t.id AS task_id, t.title, u.username AS owner_name, w.current_state,
-                   w.round, w.result, w.completed_at AS decided_at,
+                   w.round, w.required_approvals, w.completed_at AS decided_at,
                    (SELECT COUNT(*) FROM evidence e
                      WHERE e.workflow_id = w.id AND e.round = w.round) AS evidence_count,
+                   (SELECT COUNT(*) FROM review_assignments x
+                     WHERE x.workflow_id = w.id AND x.round = w.round
+                       AND x.status = 'assigned') AS reviewer_count,
+                   (SELECT COUNT(*) FROM review_decisions d
+                     WHERE d.workflow_id = w.id AND d.round = w.round) AS decided_count,
+                   (SELECT COUNT(*) FROM review_decisions m
+                     WHERE m.workflow_id = w.id AND m.round = w.round
+                       AND m.reviewer_id = ?) AS my_decisions,
                    (SELECT MAX(created_at) FROM state_transitions s
                      WHERE s.workflow_id = w.id) AS last_change
             FROM workflow_instances w
+            JOIN review_assignments a ON a.workflow_id = w.id AND a.round = w.round
+                                     AND a.reviewer_id = ? AND a.status = 'assigned'
             JOIN tasks t ON t.id = w.task_id
             JOIN users u ON u.id = w.user_id
-            WHERE w.reviewer_id = ? AND w.user_id != ? AND w.current_state IN (%s)
+            WHERE w.user_id != ? AND w.current_state IN (%s)
             ORDER BY last_change %s
         """
         me = g.user["id"]
-        queue = conn.execute(base % ("'EVIDENCE_SUBMITTED', 'VALIDATING'", "ASC"), (me, me)).fetchall()
-        decided = conn.execute(base % ("'VERIFIED', 'REJECTED'", "DESC"), (me, me)).fetchall()
+        queue = conn.execute(base % ("'EVIDENCE_SUBMITTED', 'VALIDATING'", "ASC"), (me, me, me)).fetchall()
+        decided = conn.execute(base % ("'VERIFIED', 'REJECTED'", "DESC"), (me, me, me)).fetchall()
     finally:
         conn.close()
     return render_template("review_queue.html", queue=queue, decided=decided)

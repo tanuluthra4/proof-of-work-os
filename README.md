@@ -2,7 +2,7 @@
 
 **An automata-based evidence verification system for developer skills.**
 
-Live deployment: https://proof-of-work-os.onrender.com
+Live deployment (previous version): https://proof-of-work-os.onrender.com — redeploy to get this version.
 
 ## Problem
 
@@ -16,8 +16,10 @@ Proof-of-Work OS makes a claim count only after it passes a **controlled verific
 - **Finite-state machine** governing `CREATED → IN_PROGRESS → EVIDENCE_REQUIRED → EVIDENCE_SUBMITTED → VALIDATING → VERIFIED / REJECTED` (+ `RESTART` after rejection)
 - Evidence submission (repo, commit, PR, deployment, demo, write-up, other link) with strict validation; evidence is locked once submitted
 - **Two separate account types, chosen at sign-up and sign-in** (landing page: *I'm a Developer* / *I'm a Reviewer*). Developers manage tasks and evidence; reviewers have their own page. Neither can use the other's area.
-- **Send evidence to a named reviewer** (username or e-mail). Only that reviewer sees it and only they can start a review, approve or reject (with a written reason). Nobody can review their own work.
-- **Shareable verified proof**: after approval, the developer can create a public read-only link (and `/u/<username>` profile) to put on a resume. It shows the evidence, the named reviewer, the reviewer's note and a live integrity check. Private until the developer creates the link; can be disabled.
+- **Multi-reviewer verification.** The developer sends evidence to 1-5 distinct reviewers and chooses how many must approve (default 2; policies such as 1 of 1, 2 of 2, 2 of 3). Each reviewer records their own approve/reject with a written note. Nobody can review their own work, and reviewers cannot see each other's decisions until they have decided (independence).
+- **Approval policy is sealed** into the audit chain at submission. Verified when the required number approve; rejected as soon as that number can no longer be reached. Reviewers can be replaced while unavailable; changing evidence means *withdrawing* the submission, which starts a new round (old decisions stay in history but no longer count).
+- **Invitation-only reviewers**: reviewer sign-up needs an allowlisted e-mail or an invitation code that is configured through the environment and never rendered anywhere.
+- **Shareable verified proof**: after verification, the developer can create a public read-only link (and `/u/<username>` profile). It shows approvals vs. required vs. assigned, reviewer usernames and decisions, dates, an evidence-version fingerprint, public-flagged notes and a live integrity check, plus a notice that independent reviewer approval is *not* organisation certification. Links can be revoked (HTTP 410, nothing shown); re-sharing issues a new token. Unverified or rejected proofs are never shown as verified.
 - **Standout feature — tamper-evident audit trail + live automaton view** (below)
 - Reviewer aid: transparent evidence *completeness* checklist (not automated verification)
 - Safe, repeatable schema migrations that preserve existing data
@@ -39,7 +41,7 @@ The page also draws the automaton as SVG from the real transition table: current
 
 Formally a DFA `M = (Q, Σ, δ, q0, F)`:
 
-- **Q** = 7 states, **Σ** = 7 events (`automata/states.py`)
+- **Q** = 7 states, **Σ** = 11 events (`automata/states.py`)
 - **δ** = a *partial* transition function (`automata/transitions.py`); undefined (state, event) pairs are rejected
 - **q0** = `CREATED`, **F** = `{VERIFIED}`; `VERIFIED` is terminal
 
@@ -48,15 +50,24 @@ stateDiagram-v2
     [*] --> CREATED
     CREATED --> IN_PROGRESS: START (owner)
     IN_PROGRESS --> EVIDENCE_REQUIRED: REQUEST_EVIDENCE (owner)
-    EVIDENCE_REQUIRED --> EVIDENCE_SUBMITTED: SUBMIT_EVIDENCE (owner, needs evidence)
-    EVIDENCE_SUBMITTED --> VALIDATING: START_VALIDATION (reviewer)
-    VALIDATING --> VERIFIED: APPROVE (reviewer, reason)
-    VALIDATING --> REJECTED: REJECT (reviewer, reason)
-    REJECTED --> IN_PROGRESS: RESTART (owner)
+    EVIDENCE_REQUIRED --> EVIDENCE_SUBMITTED: SUBMIT_EVIDENCE (owner; evidence + reviewers; seals policy)
+    EVIDENCE_SUBMITTED --> VALIDATING: START_VALIDATION (assigned reviewer)
+    EVIDENCE_SUBMITTED --> EVIDENCE_SUBMITTED: REASSIGN_REVIEWER (owner)
+    VALIDATING --> VALIDATING: VOTE_APPROVE / VOTE_REJECT (assigned reviewer, once each)
+    VALIDATING --> VALIDATING: REASSIGN_REVIEWER (owner)
+    VALIDATING --> VERIFIED: APPROVE (system: approvals >= required)
+    VALIDATING --> REJECTED: REJECT (system: approval no longer possible)
+    EVIDENCE_SUBMITTED --> IN_PROGRESS: WITHDRAW (owner, new round)
+    VALIDATING --> IN_PROGRESS: WITHDRAW (owner, new round)
+    REJECTED --> IN_PROGRESS: RESTART (owner, new round)
     VERIFIED --> [*]
 ```
 
-Beyond δ, the engine checks, in order: event exists → δ defined → actor allowed (role read from DB; owner can never review own work) → guards (evidence present; decision reason ≥ 5 chars) → atomic write.
+Beyond δ, the engine checks, in order: event exists → δ defined (else `INVALID_TRANSITION`) → actor allowed (`UNAUTHORIZED_ACTOR`; role read from DB; a reviewer must be assigned to *this* round; the owner can never review own work) → guards (`GUARD_FAILED`: evidence present, 1 ≤ k ≤ n reviewers, note 5-2000 chars, one decision per reviewer; `EVIDENCE_CHANGED`: evidence digest differs from the sealed one) → atomic write. Every refusal is logged to `blocked_actions`.
+
+**Approval policy.** Votes are self-loops in `VALIDATING`. After each vote the engine, in the same transaction, fires `APPROVE` (system actor) if approvals ≥ k, or `REJECT` if rejections > n − k (approval impossible; with k = n a single rejection rejects). `APPROVE`/`REJECT` can never be fired by a person. The policy `{reviewers, required}` is stored in the hashed `meta` of the `SUBMIT_EVIDENCE` link, so it cannot be changed afterwards without breaking the chain, and `verify_chain` re-checks quorum, voter eligibility, duplicate votes and that `review_decisions` matches the chain.
+
+**Races.** Transitions run in `BEGIN IMMEDIATE` with compare-and-swap on state and transition count; concurrent identical votes or events advance exactly once.
 
 **Change from the earlier version:** `VERIFIED → RESTART` was removed so a verified proof cannot be silently re-opened.
 
@@ -82,6 +93,8 @@ Existing tables are kept. Migration 1 (tracked via `PRAGMA user_version`) adds: 
 
 Migration 2 adds `workflow_instances.reviewer_id` (who the evidence was sent to) and `share_token` (public link; unique, null = private).
 
+Migration 3 (multi-reviewer) adds `review_assignments` (per workflow/round/reviewer; `assigned` or `cancelled`, never deleted), `review_decisions` (one row per reviewer per round: decision, shared note, private note, public flag, evidence digest, timestamp; append-only triggers), `state_transitions.meta`, `workflow_instances.required_approvals` and `share_revoked_at`. Existing single-reviewer assignments become assignments; **no historical decisions are fabricated**: old proofs keep their original chain (verified by a test using a real v2 database) and the public page derives the old reviewer's decision from that chain.
+
 Upgrade: just start the app or run `flask --app app init-db`. Safe to repeat. Back up your `.db` first as good practice.
 
 `tasks.status` (Pending/Completed) is the owner's **self-reported** progress. The **workflow state** is the verified truth. Approval also sets status to Completed.
@@ -95,13 +108,13 @@ export REVIEWER_EMAILS=reviewer@example.com        # optional; see below
 python app.py                                       # http://127.0.0.1:5000
 ```
 
-Open `http://127.0.0.1:5000/` and choose **Developer** or **Reviewer** to reach the matching sign-in portal. The selected portal does not grant permissions: login checks the role stored for the account. Open `http://127.0.0.1:5000/`, choose **Developer** or **Reviewer**, and create an account for each (use two browsers or a private window). The role is fixed at sign-up and checked at every sign-in. On a public deployment set `REVIEWER_OPEN_SIGNUP=0` so only e-mails in `REVIEWER_EMAILS` can register as reviewers. `flask --app app set-role someone@example.com reviewer` changes an existing account.
+Open `http://127.0.0.1:5000/` and choose **Developer** or **Reviewer**. The role is fixed at sign-up and checked at every sign-in. Reviewer sign-up is **invitation-only by default**: set `REVIEWER_EMAILS` (allowlist) and/or `REVIEWER_INVITE_CODE`. For local demos only, `REVIEWER_OPEN_SIGNUP=1` lets anyone register as a reviewer. `flask --app app set-role someone@example.com reviewer` changes an existing account.
 
 ### Demo script (3 minutes)
-1. Developer: create task → *Start work* → *Ready to provide proof* → add repo + write-up → choose reviewer (their username/e-mail) → *Submit*.
+1. Developer: create task → *Start work* → *Ready to provide proof* → add repo + write-up → enter 3 reviewer usernames, approvals required 2 → *Submit*.
 2. Open "Demo: try an action the automaton should refuse", attempt `APPROVE` → blocked and logged.
-3. Reviewer (other browser): Review requests → open → *Begin review* → approve/reject with a reason. A different reviewer sees nothing.
-4. Developer: *Create public link* → open it logged-out: evidence, reviewer, integrity check.
+3. Reviewer 1 and 2 (separate browsers): Review requests → open → *Begin review* → approve with a note (optionally mark it public). Reviewer 2 cannot see reviewer 1's decision until deciding; an unassigned reviewer sees nothing. After the second approval the system fires `APPROVE`.
+4. Developer: *Create public link* → open it logged-out: 2 of 3 approvals, public notes, integrity check. *Revoke link* → the same URL now returns 410.
 5. Tamper (below) and reload: "TAMPERING DETECTED" on both the task page and the public page.
 
 Tamper demo (sqlite3 shell on your local DB):
@@ -117,8 +130,11 @@ UPDATE state_transitions SET reason = 'edited' WHERE seq = 1;
 | `SECRET_KEY` | Session signing. **Required** when `POW_ENV=production` |
 | `POW_ENV` | `production` enables Secure cookies and the SECRET_KEY check |
 | `DATABASE_PATH` | SQLite file (default `database/pow_os.db`) |
-| `REVIEWER_OPEN_SIGNUP` | `1` (default) anyone may register as a reviewer; `0` restricts reviewer sign-up to `REVIEWER_EMAILS` |
-| `REVIEWER_EMAILS` | Comma-separated e-mails allowed to register as reviewers when open sign-up is off |
+| `REVIEWER_EMAILS` | Comma-separated allowlist of e-mails that may register as reviewers |
+| `REVIEWER_INVITE_CODE` | Shared invitation code accepted at reviewer sign-up (constant-time compared; never rendered, logged or committed). Set it in the host dashboard only |
+| `REVIEWER_OPEN_SIGNUP` | `0` (default). `1` lets anyone register as a reviewer: **local demos only** |
+| `DEFAULT_REQUIRED_APPROVALS` | Pre-filled approvals required in the form (default `2`) |
+| `PUBLIC_BASE_URL` | Optional, e.g. `https://proof-of-work-os.onrender.com`. Only if set are canonical/`og:url` tags emitted |
 | `PORT` | Used by `python app.py` |
 
 ## Tests
@@ -126,20 +142,33 @@ UPDATE state_transitions SET reason = 'edited' WHERE seq = 1;
 ```bash
 python -m pytest -q
 ```
-Tests use temporary databases and never touch `database/pow_os.db`. They cover transitions, invalid moves, role/guard enforcement, rollback, concurrency, tamper detection, evidence validation, auth/CSRF, user isolation, migrations, and an HTTP end-to-end flow.
+Tests use temporary databases and never touch `database/pow_os.db`. They cover transitions, invalid moves, role/guard enforcement, rollback, concurrency, k-of-n quorum (1/1, 2/2, 2/3), rejection when approval is impossible, duplicate votes, reassignment, withdrawal, evidence-change guard, tamper detection (edited, fabricated or removed decisions; forged quorum), migrations from a real v2 database, invite-only signup, independence and private-note privacy, public-page privacy and revocation, SEO/robots headers, and HTTP end-to-end flows.
 
 ## Deployment (Render)
 
-`render.yaml` runs gunicorn with a generated `SECRET_KEY`. Set `REVIEWER_EMAILS` in the dashboard. **SQLite on Render's free plan is ephemeral** — data resets on deploy/restart. For persistence attach a paid disk and set `DATABASE_PATH` (see comments in `render.yaml`) or move to PostgreSQL (not implemented).
+`render.yaml` runs gunicorn with a generated `SECRET_KEY`. Set `REVIEWER_EMAILS` and/or `REVIEWER_INVITE_CODE` in the dashboard (`sync: false` in `render.yaml`, so values are never in the repo). Migration 3 runs automatically on start and only adds tables/columns; nothing destructive. Do not delete or recreate the production database to test this. **SQLite on Render's free plan is ephemeral** — data resets on deploy/restart. For persistence attach a paid disk and set `DATABASE_PATH` (see comments in `render.yaml`) or move to PostgreSQL (not implemented).
 
-## Known limitations / future work
+## Known limitations / honest claims
 
-- **Trust in reviewers is the weak point.** Reviewer accounts are self-registered, so a developer could create a second account and approve themselves. The public page therefore shows the reviewer's name and says what "verified" does and does not mean; a recruiter decides how much to trust that reviewer. Stronger options (invitation-only reviewers, e-mail verification, domain/organisation checks) are future work
-- The reviewer for a submission cannot be changed after submitting; there is no reviewer reassignment, reminder or expiry
-- No automated checks of GitHub (repo exists, commit authorship); the completeness checklist is not verification
-- Hash chain is not externally anchored; no login rate-limiting or password reset; no file uploads
-- A public recruiter-facing profile of verified skills is not built; skills/`evidence_skills` tables exist but are unused
-- No screenshots are bundled: run the app and capture your own
+- **Multiple reviewers do not equal organisational trust.** Reviewers are individual accounts. Their identity, employer and expertise are *not* verified. Invitation-only sign-up limits who can become a reviewer but does not prove who they are; a determined developer who controls an allowlisted e-mail or the invite code could still create accounts. The public page says this.
+- **Tamper-evident, not tamper-proof.** Anyone who can write the SQLite file can recompute the whole chain. Private notes and sharing columns are outside the hash chain. Anchoring `chain_head` externally is future work.
+- **The completeness checklist is not proof of authorship** and does not measure code quality. No automated GitHub checks.
+- Share tokens are stored in plain text (unguessable, 144+ bits, revocable). No rate-limiting on login or invite-code guesses; no e-mail verification or password reset.
+- No reviewer reminders or expiry; an unavailable reviewer is handled by manual replacement or withdrawal.
+- Contrast was computed for the colour tokens (see below), but no screen-reader or full WCAG audit has been performed, and no Lighthouse run is claimed.
+- SQLite on Render's free plan is ephemeral.
+
+## Accessibility and SEO
+
+Skip link, visible `:focus-visible` outlines, labelled form controls, landmarks, reduced-motion support. The only token pair that failed 4.5:1 (light-theme muted text on page and tinted backgrounds, 4.40 and 4.26) was darkened to `#56637a` (>= 5.29 on every background used). Only the landing page is indexable (title, description, Open Graph, favicon); every other page sends `noindex` (meta and `X-Robots-Tag`) and `robots.txt` disallows everything but `/`.
+
+## Viva notes
+
+- *Why an automaton?* Allowed lifecycle moves are data (a partial function δ); anything undefined is refused and logged, and the audit trail can be re-validated by replaying it through the same δ.
+- *Why are votes self-loops and APPROVE a system event?* The outcome is a function of the recorded votes and the sealed policy, so nobody can assert "verified" directly; the replay recomputes it.
+- *What stops double votes or lost updates?* A UNIQUE(workflow, round, reviewer) constraint, guards, `BEGIN IMMEDIATE`, and compare-and-swap on state and count.
+- *What if evidence changes?* The digest sealed at submission must match at every vote; changing evidence requires withdrawing, which opens a new round.
+- *Is it secure?* Tamper-evident, role-checked, CSRF-protected, reviewers invitation-only. It is not tamper-proof and reviewer identity is not verified.
 
 ## Author
 Tanu Luthra

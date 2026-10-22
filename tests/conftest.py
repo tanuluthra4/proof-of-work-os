@@ -18,5 +18,5 @@ def app(tmp_path):
         "TESTING": True,
         "DATABASE": str(tmp_path / "test.db"),
         "SECRET_KEY": "test-secret",
-        "REVIEWER_EMAILS": frozenset({"rev@example.com"}),
+        "REVIEWER_OPEN_SIGNUP": True,
     })

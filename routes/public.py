@@ -1,10 +1,15 @@
 """Public, read-only pages. Nothing here is visible unless the developer
-explicitly created a share link for a VERIFIED proof."""
+explicitly created a share link for a VERIFIED proof; revoking the link stops
+exposing the proof immediately. Reviewer e-mails, private notes, internal ids
+and session data are never rendered here."""
+import json
+
 from flask import Blueprint, abort, render_template
 
 from database.db import get_db_connection
 from services.evidence_service import EVIDENCE_TYPES
 from services.integrity import verify_chain
+from services.review_service import public_summary
 
 public_bp = Blueprint("public", __name__)
 
@@ -13,22 +18,27 @@ public_bp = Blueprint("public", __name__)
 def proof(token):
     conn = get_db_connection()
     try:
-        proof_row = conn.execute(
+        row = conn.execute(
             """
-            SELECT w.id AS workflow_id, w.round, w.completed_at, w.chain_head,
-                   t.title, t.description, p.title AS project_title,
-                   u.username AS owner_name, rv.username AS reviewer_name
+            SELECT w.id AS workflow_id, w.round, w.current_state, w.completed_at, w.chain_head,
+                   w.required_approvals, w.share_revoked_at,
+                   t.title, t.description, p.title AS project_title, u.username AS owner_name
             FROM workflow_instances w
             JOIN tasks t ON t.id = w.task_id
             JOIN users u ON u.id = w.user_id
-            LEFT JOIN users rv ON rv.id = w.reviewer_id
             LEFT JOIN projects p ON p.id = t.project_id
-            WHERE w.share_token = ? AND w.current_state = 'VERIFIED'
+            WHERE w.share_token = ?
             """,
             (token,),
         ).fetchone()
-        if proof_row is None:
+        if row is None:
             abort(404)
+
+        if row["share_revoked_at"]:
+            # No title, evidence or names: a revoked link exposes nothing.
+            return render_template("proof_unavailable.html", reason="revoked"), 410
+        if row["current_state"] != "VERIFIED":
+            return render_template("proof_unavailable.html", reason="not_verified"), 404
 
         evidence = conn.execute(
             """
@@ -37,21 +47,32 @@ def proof(token):
             WHERE workflow_id = ? AND round = ? AND verification_status = 'approved'
             ORDER BY id
             """,
-            (proof_row["workflow_id"], proof_row["round"]),
+            (row["workflow_id"], row["round"]),
         ).fetchall()
-        decision = conn.execute(
-            """
-            SELECT reason, created_at FROM state_transitions
-            WHERE workflow_id = ? AND event = 'APPROVE' ORDER BY seq DESC LIMIT 1
-            """,
-            (proof_row["workflow_id"],),
+        submitted = conn.execute(
+            "SELECT created_at, evidence_digest, meta FROM state_transitions "
+            "WHERE workflow_id = ? AND event = 'SUBMIT_EVIDENCE' ORDER BY seq DESC LIMIT 1",
+            (row["workflow_id"],),
         ).fetchone()
-        chain = verify_chain(conn, proof_row["workflow_id"])
+        reviewers = public_summary(conn, row["workflow_id"], row["round"])
+        chain = verify_chain(conn, row["workflow_id"])
     finally:
         conn.close()
 
-    return render_template("proof.html", proof=proof_row, evidence=evidence, decision=decision,
-                           chain=chain, evidence_types=EVIDENCE_TYPES)
+    policy = None
+    if submitted and submitted["meta"]:
+        try:
+            policy = json.loads(submitted["meta"])
+        except ValueError:
+            policy = None
+    approvals = sum(1 for r in reviewers if r["decision"] == "approve")
+    return render_template(
+        "proof.html", proof=row, evidence=evidence, reviewers=reviewers, approvals=approvals,
+        required=row["required_approvals"], assigned=len(policy["reviewers"]) if policy else len(reviewers),
+        submitted_at=submitted["created_at"] if submitted else None,
+        version=(submitted["evidence_digest"][:12] if submitted and submitted["evidence_digest"] else None),
+        chain=chain, evidence_types=EVIDENCE_TYPES,
+    )
 
 
 @public_bp.route("/u/<username>")
@@ -64,11 +85,15 @@ def profile(username):
             abort(404)
         proofs = conn.execute(
             """
-            SELECT t.title, w.share_token, w.completed_at, rv.username AS reviewer_name
+            SELECT t.title, w.share_token, w.completed_at, w.required_approvals,
+                   (SELECT COUNT(*) FROM review_decisions d
+                     WHERE d.workflow_id = w.id AND d.round = w.round AND d.decision = 'approve') AS approvals,
+                   (SELECT COUNT(*) FROM review_assignments x
+                     WHERE x.workflow_id = w.id AND x.round = w.round AND x.status = 'assigned') AS reviewer_count
             FROM workflow_instances w
             JOIN tasks t ON t.id = w.task_id
-            LEFT JOIN users rv ON rv.id = w.reviewer_id
-            WHERE w.user_id = ? AND w.current_state = 'VERIFIED' AND w.share_token IS NOT NULL
+            WHERE w.user_id = ? AND w.current_state = 'VERIFIED'
+              AND w.share_token IS NOT NULL AND w.share_revoked_at IS NULL
             ORDER BY w.completed_at DESC
             """,
             (owner["id"],),

@@ -10,8 +10,8 @@
     {% for edge in fsm.edges %}
     <g class="edge {{ edge.status }}">
         <title>{{ edge.from }} --{{ edge.event }}--> {{ edge.to }} (fired by {{ edge.actor }})</title>
-        <line x1="{{ edge.x1 }}" y1="{{ edge.y1 }}" x2="{{ edge.x2 }}" y2="{{ edge.y2 }}" marker-end="url(#arrow-{{ edge.status }})"/>
-        <text x="{{ edge.lx }}" y="{{ edge.ly }}" text-anchor="{{ edge.anchor }}">{{ edge.event }}</text>
+        <path d="{{ edge.path }}" fill="none" marker-end="url(#arrow-{{ edge.status }})"/>
+        <text x="{{ edge.lx }}" y="{{ edge.ly }}" text-anchor="{{ edge.anchor }}">{% for line in edge.lines %}<tspan x="{{ edge.lx }}" dy="{{ 0 if loop.first else 12 }}">{{ line }}</tspan>{% endfor %}</text>
     </g>
     {% endfor %}
     {% for node in fsm.nodes %}

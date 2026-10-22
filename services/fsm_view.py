@@ -4,23 +4,29 @@ Nodes are positioned by a fixed cosmetic layout, but *edges, the current
 state, visited states and traversed edges all come from the real
 transition table and the workflow's stored history* - nothing here
 simulates the engine.
+
+Drawing rules: ordinary transitions are straight arrows; transitions that
+leave and re-enter the same state (votes, reviewer reassignment) are grouped
+into one loop above the state; WITHDRAW (back to IN_PROGRESS) is an arc over
+the top of the diagram.
 """
 import math
 
 from automata.states import WorkflowEvent, WorkflowState
 from automata.transitions import INITIAL_STATE, REQUIRED_ACTOR, all_transitions
 
-VIEW_W, VIEW_H = 940, 320
+VIEW_W, VIEW_H = 940, 390
 NODE_W, NODE_H = 128, 44
+ROW1, ROW2 = 150, 338
 
 _LAYOUT = {
-    WorkflowState.CREATED: (80, 80),
-    WorkflowState.IN_PROGRESS: (270, 80),
-    WorkflowState.EVIDENCE_REQUIRED: (460, 80),
-    WorkflowState.EVIDENCE_SUBMITTED: (650, 80),
-    WorkflowState.VALIDATING: (840, 80),
-    WorkflowState.REJECTED: (650, 260),
-    WorkflowState.VERIFIED: (840, 260),
+    WorkflowState.CREATED: (80, ROW1),
+    WorkflowState.IN_PROGRESS: (270, ROW1),
+    WorkflowState.EVIDENCE_REQUIRED: (460, ROW1),
+    WorkflowState.EVIDENCE_SUBMITTED: (650, ROW1),
+    WorkflowState.VALIDATING: (840, ROW1),
+    WorkflowState.REJECTED: (650, ROW2),
+    WorkflowState.VERIFIED: (840, ROW2),
 }
 
 EVENT_LABELS = {
@@ -28,8 +34,12 @@ EVENT_LABELS = {
     WorkflowEvent.REQUEST_EVIDENCE: "Ready to provide proof",
     WorkflowEvent.SUBMIT_EVIDENCE: "Submit evidence for review",
     WorkflowEvent.START_VALIDATION: "Begin review",
-    WorkflowEvent.APPROVE: "Approve",
-    WorkflowEvent.REJECT: "Reject",
+    WorkflowEvent.VOTE_APPROVE: "Decision: approve",
+    WorkflowEvent.VOTE_REJECT: "Decision: reject",
+    WorkflowEvent.APPROVE: "Verified (approval policy met)",
+    WorkflowEvent.REJECT: "Rejected (approval no longer possible)",
+    WorkflowEvent.REASSIGN_REVIEWER: "Replace a reviewer",
+    WorkflowEvent.WITHDRAW: "Withdraw submission to change evidence",
     WorkflowEvent.RESTART: "Restart after rejection",
 }
 
@@ -38,7 +48,7 @@ STATE_LABELS = {
     WorkflowState.IN_PROGRESS: "In progress",
     WorkflowState.EVIDENCE_REQUIRED: "Evidence required",
     WorkflowState.EVIDENCE_SUBMITTED: "Evidence submitted",
-    WorkflowState.VALIDATING: "Validating",
+    WorkflowState.VALIDATING: "Under review",
     WorkflowState.VERIFIED: "Verified",
     WorkflowState.REJECTED: "Rejected",
 }
@@ -51,6 +61,8 @@ HAPPY_PATH = [
     WorkflowState.VALIDATING,
     WorkflowState.VERIFIED,
 ]
+
+_PRIORITY = {"available": 4, "traversed": 3, "waiting": 2, "idle": 1}
 
 
 def progress_percent(state_value):
@@ -93,6 +105,7 @@ def build_fsm_view(current_state, history, available_events):
     """
     current = WorkflowState(current_state)
     traversed = {(h["from_state"], h["event"], h["to_state"]) for h in history}
+    # Votes may be redacted for a reviewer who has not decided yet; count them as taken.
     visited = {INITIAL_STATE.value, current.value}
     for h in history:
         visited.add(h["from_state"])
@@ -114,32 +127,70 @@ def build_fsm_view(current_state, history, available_events):
                     else "bad" if state == WorkflowState.REJECTED else "",
         })
 
+    def status_of(from_state, event, to_state):
+        key = (from_state.value, event.value, to_state.value)
+        if key in traversed:
+            return "traversed"
+        if from_state == current and event in available:
+            return "available"
+        if from_state == current:
+            return "waiting"        # defined here, but fired by someone else / by the policy
+        return "idle"
+
     edges = []
+    loops = {}                       # state -> grouped self-loop
     for from_state, event, to_state in all_transitions():
-        (x1, y1), (x2, y2) = _LAYOUT[from_state], _LAYOUT[to_state]
+        status = status_of(from_state, event, to_state)
+        actor = REQUIRED_ACTOR[event].value.lower()
+
+        if from_state == to_state:
+            group = loops.setdefault(from_state, {"events": [], "status": "idle", "actors": set()})
+            group["events"].append(event.value)
+            group["actors"].add(actor)
+            if _PRIORITY[status] > _PRIORITY[group["status"]]:
+                group["status"] = status
+            continue
+
+        x1, y1 = _LAYOUT[from_state]
+        x2, y2 = _LAYOUT[to_state]
+
+        if event == WorkflowEvent.WITHDRAW:
+            # An arc over the top of the diagram, back to IN_PROGRESS.
+            top1, top2 = y1 - NODE_H / 2, y2 - NODE_H / 2
+            height = 70 + 34 * (from_state == WorkflowState.VALIDATING)
+            sx, ex = x1 - 50, x2 + 20
+            edges.append({
+                "from": from_state.value, "event": event.value, "to": to_state.value,
+                "path": (f"M {sx} {top1} C {sx} {top1 - height * 1.33} "
+                         f"{ex} {top2 - height * 1.33} {ex} {top2}"),
+                "lines": [event.value], "lx": round((sx + ex) / 2, 1),
+                "ly": round(top1 - height - 8, 1), "anchor": "middle",
+                "status": status, "actor": actor,
+            })
+            continue
+
         dx, dy = x2 - x1, y2 - y1
         sx, sy = _clip(x1, y1, dx, dy)
         ex, ey = _clip(x2, y2, -dx, -dy)
-
-        key = (from_state.value, event.value, to_state.value)
-        if key in traversed:
-            status = "traversed"
-        elif from_state == current and event in available:
-            status = "available"
-        elif from_state == current:
-            status = "waiting"  # defined here, but fired by someone else
-        else:
-            status = "idle"
-
         edges.append({
-            "from": from_state.value,
-            "event": event.value,
-            "to": to_state.value,
-            "x1": round(sx, 1), "y1": round(sy, 1),
-            "x2": round(ex, 1), "y2": round(ey, 1),
+            "from": from_state.value, "event": event.value, "to": to_state.value,
+            "path": f"M {round(sx, 1)} {round(sy, 1)} L {round(ex, 1)} {round(ey, 1)}",
+            "lines": [event.value],
             **_label_position(x1, y1, x2, y2, sx, sy, ex, ey),
-            "status": status,
-            "actor": REQUIRED_ACTOR[event].value.lower(),
+            "status": status, "actor": actor,
+        })
+
+    for state, group in loops.items():
+        x, y = _LAYOUT[state]
+        top = y - NODE_H / 2
+        cx = x + 22
+        lines = group["events"]
+        edges.append({
+            "from": state.value, "event": " / ".join(lines), "to": state.value,
+            "path": f"M {cx - 14} {top} C {cx - 26} {top - 36} {cx + 26} {top - 36} {cx + 14} {top}",
+            "lines": lines, "lx": cx, "ly": round(top - 34 - 12 * (len(lines) - 1), 1),
+            "anchor": "middle", "status": group["status"],
+            "actor": "/".join(sorted(group["actors"])),
         })
 
     return {

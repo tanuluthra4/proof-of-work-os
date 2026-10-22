@@ -19,6 +19,11 @@
             <label for="password">Password</label>
             <input id="password" type="password" name="password" required minlength="8" autocomplete="new-password">
             <p class="hint">At least 8 characters.</p>
+            {% if selected_role == 'reviewer' and invite_required %}
+            <label for="invite_code">Reviewer invitation code</label>
+            <input id="invite_code" type="password" name="invite_code" autocomplete="off">
+            <p class="hint">Reviewer accounts are invitation-only. Use the e-mail address you were invited with, or the invitation code the project owner gave you.</p>
+            {% endif %}
             <button type="submit" class="btn-primary btn-block">Sign up</button>
         </form>
         <p class="small muted" style="margin-top:16px">Already registered? <a href="{{ url_for('auth.login', role=selected_role) }}">Log in</a></p>

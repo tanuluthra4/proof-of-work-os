@@ -235,46 +235,87 @@ def delete_draft_evidence(conn, workflow_id, user_id, evidence_id):
             raise EvidenceNotAllowed("Evidence item not found.")
 
 
-def assign_reviewer(conn, workflow_id, owner_id, identifier):
-    """Choose which reviewer evidence is sent to (by username or e-mail).
+MAX_REVIEWERS = 5
 
-    Allowed while the owner is still collecting evidence, or - for workflows
-    that were submitted before assignment existed - while still unassigned.
-    Returns the reviewer's username.
+
+def assign_reviewers(conn, workflow_id, owner_id, identifiers, required):
+    """Choose the reviewers (by username or e-mail) and how many must approve.
+
+    Allowed only while the owner is preparing evidence (EVIDENCE_REQUIRED), or
+    for a legacy submission that has no reviewers yet. Once evidence is
+    submitted the policy is sealed; use reassignment or withdrawal instead.
+    Returns (usernames, required).
     """
-    identifier = (identifier or "").strip().lower()
-    if not identifier:
-        raise EvidenceError(["Enter the username or e-mail of the reviewer."])
+    if isinstance(identifiers, str):
+        identifiers = re.split(r"[,\n;]+", identifiers)
+    wanted = []
+    for item in identifiers:
+        item = (item or "").strip().lower()
+        if not item:
+            continue
+        if item in wanted:
+            raise EvidenceError([f"'{item}' is listed twice. Reviewers must be distinct people."])
+        wanted.append(item)
+    if not wanted:
+        raise EvidenceError(["Enter at least one reviewer's username or e-mail."])
+    if len(wanted) > MAX_REVIEWERS:
+        raise EvidenceError([f"Choose at most {MAX_REVIEWERS} reviewers."])
+    try:
+        required = int(required)
+    except (TypeError, ValueError):
+        raise EvidenceError(["Choose how many approvals are required."]) from None
+    if not (1 <= required <= len(wanted)):
+        raise EvidenceError([f"Required approvals must be between 1 and {len(wanted)} "
+                             "(the number of reviewers you chose)."])
 
     with transaction(conn):
         workflow = conn.execute(
-            "SELECT user_id, current_state, reviewer_id FROM workflow_instances WHERE id = ?",
+            "SELECT user_id, current_state, round FROM workflow_instances WHERE id = ?",
             (workflow_id,),
         ).fetchone()
         if workflow is None or workflow["user_id"] != owner_id:
             raise EvidenceNotAllowed("Task not found.")
         state = workflow["current_state"]
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM review_assignments WHERE workflow_id = ? AND round = ? "
+            "AND status = 'assigned'", (workflow_id, workflow["round"]),
+        ).fetchone()[0]
         if not (state == WorkflowState.EVIDENCE_REQUIRED.value
-                or (state == WorkflowState.EVIDENCE_SUBMITTED.value and workflow["reviewer_id"] is None)):
+                or (state == WorkflowState.EVIDENCE_SUBMITTED.value and existing == 0)):
             raise EvidenceNotAllowed(
-                "The reviewer can only be chosen while you are preparing evidence; "
-                "after submission the request is final."
+                "Reviewers can only be chosen while you are preparing evidence. After "
+                "submission the policy is sealed; use 'replace a reviewer' or withdraw the "
+                "submission instead."
             )
 
-        reviewer = conn.execute(
-            """
-            SELECT id, username FROM users
-            WHERE role = 'reviewer' AND (lower(username) = ? OR lower(email) = ?)
-            """,
-            (identifier, identifier),
-        ).fetchone()
-        if reviewer is None:
-            raise EvidenceError(["No reviewer account matches that username or e-mail."])
-        if reviewer["id"] == owner_id:
-            raise EvidenceError(["You cannot review your own work."])
+        reviewers, missing = [], []
+        for item in wanted:
+            row = conn.execute(
+                "SELECT id, username FROM users WHERE role = 'reviewer' "
+                "AND (lower(username) = ? OR lower(email) = ?)",
+                (item, item),
+            ).fetchone()
+            if row is None:
+                missing.append(item)
+            elif row["id"] == owner_id:
+                raise EvidenceError(["You cannot review your own work."])
+            elif row["id"] in [r["id"] for r in reviewers]:
+                raise EvidenceError([f"{row['username']} is listed twice. Reviewers must be distinct."])
+            else:
+                reviewers.append(row)
+        if missing:
+            raise EvidenceError([f"No reviewer account matches: {', '.join(missing)}."])
+        if not (1 <= required <= len(reviewers)):
+            raise EvidenceError(["The same reviewer was listed twice; check the list and the "
+                                 "number required."])
 
-        conn.execute(
-            "UPDATE workflow_instances SET reviewer_id = ? WHERE id = ?",
-            (reviewer["id"], workflow_id),
+        # Before submission nothing has been recorded yet, so the draft list is simply replaced.
+        conn.execute("DELETE FROM review_assignments WHERE workflow_id = ? AND round = ?",
+                     (workflow_id, workflow["round"]))
+        conn.executemany(
+            "INSERT INTO review_assignments (workflow_id, round, reviewer_id) VALUES (?, ?, ?)",
+            [(workflow_id, workflow["round"], r["id"]) for r in reviewers],
         )
-        return reviewer["username"]
+        conn.execute("UPDATE workflow_instances SET required_approvals = ? WHERE id = ?",
+                     (required, workflow_id))
+        return [r["username"] for r in reviewers], required

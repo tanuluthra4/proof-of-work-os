@@ -267,11 +267,12 @@ def test_full_workflow_end_to_end(app, alice, reviewer):
     alice.post(f"/tasks/{task_id}/evidence", {"evidence_type": "writeup",
                                               "description": "I built the models, routes and tests, and deployed it on Render."})
     # evidence is complete but no reviewer was chosen yet -> refused
-    assert "Choose the reviewer" in fire(alice, task_id, "SUBMIT_EVIDENCE").get_data(as_text=True)
+    assert "Choose the reviewers" in fire(alice, task_id, "SUBMIT_EVIDENCE").get_data(as_text=True)
     assert state(app, task_id) == "EVIDENCE_REQUIRED"
-    unknown = alice.post(f"/tasks/{task_id}/reviewer", {"reviewer": "nobody"}, follow_redirects=True)
+    unknown = alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "nobody", "required": "1"},
+                         follow_redirects=True)
     assert "No reviewer account matches" in unknown.get_data(as_text=True)
-    alice.post(f"/tasks/{task_id}/reviewer", {"reviewer": "REV@example.com"})
+    alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "REV@example.com", "required": "1"})
     fire(alice, task_id, "SUBMIT_EVIDENCE")
     assert state(app, task_id) == "EVIDENCE_SUBMITTED"
 
@@ -288,13 +289,13 @@ def test_full_workflow_end_to_end(app, alice, reviewer):
     assert state(app, task_id) == "VALIDATING"
 
     # self-approval through the UI is refused
-    own = fire(alice, task_id, "APPROVE", "approving myself")
+    own = fire(alice, task_id, "VOTE_APPROVE", "approving myself")
     assert "UNAUTHORIZED_ACTOR" in own.get_data(as_text=True) and state(app, task_id) == "VALIDATING"
 
     # a decision needs a reason
-    assert "GUARD_FAILED" in fire(reviewer, task_id, "REJECT").get_data(as_text=True)
+    assert "GUARD_FAILED" in fire(reviewer, task_id, "VOTE_REJECT").get_data(as_text=True)
 
-    fire(reviewer, task_id, "REJECT", "The repository does not contain the code described.")
+    fire(reviewer, task_id, "VOTE_REJECT", "The repository does not contain the code described.")
     assert state(app, task_id) == "REJECTED"
     detail = alice.get(f"/tasks/{task_id}").get_data(as_text=True)
     assert "The repository does not contain the code described." in detail
@@ -306,7 +307,7 @@ def test_full_workflow_end_to_end(app, alice, reviewer):
                                               "evidence_url": "https://github.com/octocat/hello/commit/abcdef1"})
     fire(alice, task_id, "SUBMIT_EVIDENCE")
     fire(reviewer, task_id, "START_VALIDATION")
-    fire(reviewer, task_id, "APPROVE", "Commit is authored by the developer and implements the claim.")
+    fire(reviewer, task_id, "VOTE_APPROVE", "Commit is authored by the developer and implements the claim.")
     assert state(app, task_id) == "VERIFIED"
 
     page = alice.get(f"/tasks/{task_id}").get_data(as_text=True)
@@ -406,13 +407,36 @@ def test_signup_creates_the_chosen_role_and_lands_on_the_right_home(app):
     assert Browser(app).get("/signup?role=admin").status_code == 400
 
 
-def test_reviewer_signup_can_be_restricted_to_an_allowlist(app):
+def test_reviewer_signup_is_invitation_only(app):
     app.config["REVIEWER_OPEN_SIGNUP"] = False
+    app.config["REVIEWER_EMAILS"] = frozenset({"rev@example.com"})
+    app.config["REVIEWER_INVITE_CODE"] = "s3cret-code"
     stranger = Browser(app)
     response = stranger.signup("stranger", role="reviewer")
-    assert response.status_code == 200 and "invitation-only" in response.get_data(as_text=True)
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200 and "invitation-only" in html
+    assert "s3cret-code" not in html                        # the code is never echoed
     assert query(app, "SELECT COUNT(*) FROM users")[0][0] == 0
+    # wrong code is refused, without revealing the right one
+    bad = Browser(app)
+    r = bad.post("/signup", {"username": "badguy", "email": "bad@example.com", "password": "correct-horse",
+                             "role": "reviewer", "invite_code": "guess"})
+    assert r.status_code == 200 and "s3cret-code" not in r.get_data(as_text=True)
+    # allowlisted e-mail works, and so does the correct code
     assert Browser(app).signup("rev", "rev@example.com", role="reviewer").status_code == 302
+    good = Browser(app)
+    assert good.post("/signup", {"username": "coded", "email": "coded@example.com", "password": "correct-horse",
+                                 "role": "reviewer", "invite_code": "s3cret-code"}).status_code == 302
+    # a developer account is never blocked by the reviewer rules
+    assert Browser(app).signup("dev1", role="developer").status_code == 302
+
+
+def test_invite_code_field_only_shown_when_required(app):
+    app.config["REVIEWER_OPEN_SIGNUP"] = False
+    app.config["REVIEWER_INVITE_CODE"] = "s3cret-code"
+    html = Browser(app).get("/signup?role=reviewer").get_data(as_text=True)
+    assert 'name="invite_code"' in html and "s3cret-code" not in html
+    assert 'name="invite_code"' not in Browser(app).get("/signup?role=developer").get_data(as_text=True)
 
 
 def test_roles_are_separate_areas(app, alice, reviewer):
@@ -426,12 +450,12 @@ def test_roles_are_separate_areas(app, alice, reviewer):
     assert reviewer.get("/").headers["Location"].endswith("/review")
 
 
-def submit_for(browser, task_id, reviewer_name):
+def submit_for(browser, task_id, reviewer_name, required=1):
     fire(browser, task_id, "START")
     fire(browser, task_id, "REQUEST_EVIDENCE")
     browser.post(f"/tasks/{task_id}/evidence", {"evidence_type": "github_repo",
                                                 "evidence_url": "https://github.com/octocat/hello"})
-    browser.post(f"/tasks/{task_id}/reviewer", {"reviewer": reviewer_name})
+    browser.post(f"/tasks/{task_id}/reviewer", {"reviewers": reviewer_name, "required": str(required)})
     fire(browser, task_id, "SUBMIT_EVIDENCE")
 
 
@@ -447,29 +471,29 @@ def test_reviewer_only_sees_evidence_sent_to_them(app, alice, reviewer):
     assert other.get(f"/tasks/{task_id}").status_code == 404
     fire(other, task_id, "START_VALIDATION")                  # 404, not even visible to them
     assert state(app, task_id) == "EVIDENCE_SUBMITTED"      # another reviewer cannot move it
-    assert query(app, "SELECT reason FROM state_transitions WHERE event = 'SUBMIT_EVIDENCE'")[0][0] == "Sent to reviewer rev"
+    assert query(app, "SELECT reason FROM state_transitions WHERE event = 'SUBMIT_EVIDENCE'")[0][0] == "Sent to rev; 1 of 1 approval required"
 
 
 def test_reviewer_choice_rules(app, alice, bob, reviewer):
     task_id = create_task(alice)
     fire(alice, task_id, "START")
-    assert "preparing evidence" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewer": "rev"},
+    assert "preparing evidence" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"},
                                               follow_redirects=True).get_data(as_text=True)
     fire(alice, task_id, "REQUEST_EVIDENCE")
     # a developer account is not a valid reviewer
-    assert "No reviewer account" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewer": "bob"},
+    assert "No reviewer account" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "bob", "required": "1"},
                                                follow_redirects=True).get_data(as_text=True)
     # nobody else can assign on alice's task
-    assert bob.post(f"/tasks/{task_id}/reviewer", {"reviewer": "rev"}).status_code == 404
-    alice.post(f"/tasks/{task_id}/reviewer", {"reviewer": "rev"})
-    assert query(app, "SELECT reviewer_id FROM workflow_instances")[0][0] is not None
+    assert bob.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"}).status_code == 404
+    alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"})
+    assert query(app, "SELECT COUNT(*) FROM review_assignments")[0][0] == 1
 
 
 def verify_task(app, alice, reviewer, title="Shareable work"):
     task_id = create_task(alice, title)
     submit_for(alice, task_id, "rev")
     fire(reviewer, task_id, "START_VALIDATION")
-    fire(reviewer, task_id, "APPROVE", "Matches the claim.")
+    fire(reviewer, task_id, "VOTE_APPROVE", "Matches the claim.")
     assert state(app, task_id) == "VERIFIED"
     return task_id
 
@@ -486,14 +510,28 @@ def test_public_proof_link_is_private_until_shared(app, alice, reviewer):
     page = visitor.get(f"/proof/{token}")
     html = page.get_data(as_text=True)
     assert page.status_code == 200
-    assert "Shareable work" in html and "Reviewed by" in html and "rev" in html
-    assert "Matches the claim." in html and "github.com/octocat/hello" in html
+    assert "Shareable work" in html and "Reviewer approvals" in html and "rev" in html
+    assert "1</span><span class=\"muted\"> of 1 assigned" in html
+    assert "not organisation certification" in html
+    assert 'name="robots" content="noindex' in html
+    assert "Matches the claim." not in html                    # the note was not marked public
+    assert "github.com/octocat/hello" in html
     assert "every hash matched" in html
     assert "alice@example.com" not in html                     # no e-mail leakage
     assert "Shareable work" in visitor.get("/u/alice").get_data(as_text=True)
 
     alice.post(f"/tasks/{task_id}/unshare")
-    assert visitor.get(f"/proof/{token}").status_code == 404
+    gone = visitor.get(f"/proof/{token}")
+    assert gone.status_code == 410
+    leaked = gone.get_data(as_text=True)
+    assert "Shareable work" not in leaked and "octocat" not in leaked and "rev" not in leaked.replace("revoked", "")
+    assert "Shareable work" not in visitor.get("/u/alice").get_data(as_text=True)
+    # re-sharing issues a NEW token; the old one stays dead
+    alice.post(f"/tasks/{task_id}/share")
+    new_token = query(app, "SELECT share_token FROM workflow_instances")[0][0]
+    assert new_token != token
+    assert visitor.get(f"/proof/{token}").status_code in (404, 410)
+    assert visitor.get(f"/proof/{new_token}").status_code == 200
 
 
 def test_only_verified_owned_tasks_can_be_shared(app, alice, bob, reviewer):
@@ -509,5 +547,149 @@ def test_tampered_proof_is_flagged_publicly(app, alice, reviewer):
     task_id = verify_task(app, alice, reviewer)
     alice.post(f"/tasks/{task_id}/share")
     token = query(app, "SELECT share_token FROM workflow_instances")[0][0]
-    execute(app, "UPDATE state_transitions SET reason = 'forged' WHERE event = 'APPROVE'", drop_triggers=True)
+    execute(app, "UPDATE state_transitions SET reason = 'forged' WHERE event = 'VOTE_APPROVE'", drop_triggers=True)
     assert "failed its integrity check" in Browser(app).get(f"/proof/{token}").get_data(as_text=True)
+
+
+# ------------------------------------------------- multi-reviewer over HTTP
+@pytest.fixture
+def trio(app):
+    names = {}
+    for n in ("rev_a", "rev_b", "rev_c"):
+        b = Browser(app)
+        assert b.signup(n, role="reviewer").status_code == 302
+        names[n] = b
+    return names
+
+
+def to_validating(app, alice, task_id, trio, required=2):
+    submit_for(alice, task_id, "rev_a\nrev_b\nrev_c", required)
+    assert state(app, task_id) == "EVIDENCE_SUBMITTED"
+    fire(trio["rev_a"], task_id, "START_VALIDATION")
+    assert state(app, task_id) == "VALIDATING"
+
+
+def test_two_of_three_over_http_and_independence(app, alice, trio):
+    task_id = create_task(alice, "Needs two approvals")
+    to_validating(app, alice, task_id, trio)
+    fire(trio["rev_a"], task_id, "VOTE_APPROVE", "Public repo matches the claim.")
+    assert state(app, task_id) == "VALIDATING"
+
+    # r2 has not decided: sees that a vote exists but not its content
+    page = trio["rev_b"].get(f"/tasks/{task_id}").get_data(as_text=True)
+    assert "Public repo matches the claim." not in page
+    # the developer does see shared notes
+    assert "Public repo matches the claim." in alice.get(f"/tasks/{task_id}").get_data(as_text=True)
+
+    fire(trio["rev_b"], task_id, "VOTE_APPROVE", "Confirmed commits.")
+    assert state(app, task_id) == "VERIFIED"
+    assert query(app, "SELECT COUNT(*) FROM review_decisions")[0][0] == 2
+    # r3 was never needed, but sees the closed outcome
+    assert trio["rev_c"].get(f"/tasks/{task_id}").status_code == 200
+    # a second vote by r1 is refused
+    again = fire(trio["rev_a"], task_id, "VOTE_APPROVE", "voting twice here")
+    assert "GUARD_FAILED" in again.get_data(as_text=True) or "INVALID_TRANSITION" in again.get_data(as_text=True)
+    assert query(app, "SELECT COUNT(*) FROM review_decisions")[0][0] == 2
+
+
+def test_private_notes_never_reach_developer_peers_or_public(app, alice, trio):
+    task_id = create_task(alice, "Private notes")
+    to_validating(app, alice, task_id, trio, required=1)
+    trio["rev_a"].post(f"/tasks/{task_id}/events/VOTE_APPROVE", {
+        "reason": "Shared note for the developer.", "private_notes": "PRIVATE-SECRET-123", "note_public": "1"})
+    assert state(app, task_id) == "VERIFIED"
+    assert "PRIVATE-SECRET-123" in trio["rev_a"].get(f"/tasks/{task_id}").get_data(as_text=True)   # author only
+    for who in (alice, trio["rev_b"]):
+        assert "PRIVATE-SECRET-123" not in who.get(f"/tasks/{task_id}").get_data(as_text=True)
+    alice.post(f"/tasks/{task_id}/share")
+    token = query(app, "SELECT share_token FROM workflow_instances")[0][0]
+    public = Browser(app).get(f"/proof/{token}").get_data(as_text=True)
+    assert "PRIVATE-SECRET-123" not in public and "Shared note for the developer." in public   # note was marked public
+
+
+def test_non_public_notes_stay_off_the_public_page(app, alice, trio):
+    task_id = create_task(alice, "Note visibility")
+    to_validating(app, alice, task_id, trio, required=1)
+    fire(trio["rev_a"], task_id, "VOTE_APPROVE", "Only for the developer to read.")
+    alice.post(f"/tasks/{task_id}/share")
+    token = query(app, "SELECT share_token FROM workflow_instances")[0][0]
+    public = Browser(app).get(f"/proof/{token}").get_data(as_text=True)
+    assert "Only for the developer to read." not in public
+    assert "rev_a@example.com" not in public and "alice@example.com" not in public
+
+
+def test_public_page_never_shows_unverified_or_rejected(app, alice, trio):
+    task_id = create_task(alice, "Gets rejected")
+    to_validating(app, alice, task_id, trio, required=3)
+    fire(trio["rev_a"], task_id, "VOTE_REJECT", "Cannot confirm the claimed work.")
+    assert state(app, task_id) == "REJECTED"
+    execute(app, "UPDATE workflow_instances SET share_token = 'forcedtoken'")      # even if a token existed
+    page = Browser(app).get("/proof/forcedtoken")
+    assert page.status_code == 404 and "Gets rejected" not in page.get_data(as_text=True)
+
+
+def test_unassigned_reviewer_gets_404_and_cannot_vote(app, alice, trio):
+    task_id = create_task(alice, "Two only")
+    submit_for(alice, task_id, "rev_a\nrev_b", 2)
+    assert trio["rev_c"].get(f"/tasks/{task_id}").status_code == 404
+    assert trio["rev_c"].post(f"/tasks/{task_id}/events/VOTE_APPROVE", {"reason": "not assigned"}).status_code == 404
+    assert "Two only" not in trio["rev_c"].get("/review").get_data(as_text=True)
+
+
+def test_withdraw_and_reassign_over_http(app, alice, trio):
+    task_id = create_task(alice, "Change of plan")
+    submit_for(alice, task_id, "rev_a\nrev_b", 2)
+    fire(trio["rev_a"], task_id, "START_VALIDATION")
+    r = alice.post(f"/tasks/{task_id}/events/REASSIGN_REVIEWER", {"remove": "rev_b", "add": "nobody"}, follow_redirects=True)
+    assert "GUARD_FAILED" in r.get_data(as_text=True)
+    r = alice.post(f"/tasks/{task_id}/events/REASSIGN_REVIEWER", {"remove": "rev_b", "add": "rev_c", "reason": "rev_b away"},
+                   follow_redirects=True)
+    assert "Blocked (" not in r.get_data(as_text=True)
+    assert [r[0] for r in query(app, "SELECT u.username FROM review_assignments a JOIN users u ON u.id=a.reviewer_id "
+                                      "WHERE a.status='assigned' ORDER BY 1")] == ["rev_a", "rev_c"]
+    fire(alice, task_id, "WITHDRAW")
+    assert state(app, task_id) == "IN_PROGRESS"
+    assert trio["rev_a"].post(f"/tasks/{task_id}/events/WITHDRAW", {}).status_code in (302, 200, 404)
+    assert state(app, task_id) == "IN_PROGRESS"
+
+
+def test_reviewers_cannot_fire_owner_events_or_approve_directly(app, alice, trio):
+    task_id = create_task(alice, "Direct approve")
+    to_validating(app, alice, task_id, trio)
+    for event in ("APPROVE", "REJECT", "WITHDRAW", "REASSIGN_REVIEWER", "START"):
+        fire(trio["rev_a"], task_id, event, "attempting to force this")
+    assert state(app, task_id) == "VALIDATING"
+    blocked = query(app, "SELECT COUNT(*) FROM blocked_actions")[0][0]
+    assert blocked >= 4
+    # reviewers do not see the owner's blocked-attempts log
+    assert "Blocked attempts" not in trio["rev_a"].get(f"/tasks/{task_id}").get_data(as_text=True)
+
+
+def test_review_queue_shows_progress(app, alice, trio):
+    task_id = create_task(alice, "Queue progress")
+    to_validating(app, alice, task_id, trio)
+    fire(trio["rev_a"], task_id, "VOTE_APPROVE", "Looks fine to me, thanks.")
+    html = trio["rev_a"].get("/review").get_data(as_text=True)
+    assert "1 of 3 decided" in html and "2 approvals needed" in html and "you decided" in html
+
+
+def test_landing_page_seo_and_navigation(app):
+    html = Browser(app).get("/").get_data(as_text=True)
+    assert 'name="description" content="Proof-of-Work OS helps developers submit work evidence, get skills reviewed, and share verified proof with recruiters."' in html
+    assert 'property="og:title"' in html and 'rel="icon"' in html
+    assert "noindex" not in html
+    for anchor in ("#how-it-works", "#verification", "#faq"):
+        assert f'href="{anchor}"' in html and f'id="{anchor[1:]}"' in html
+    assert 'href="#"' not in html                       # no dead links
+    assert "canonical" not in html                      # PUBLIC_BASE_URL not configured
+    app.config["PUBLIC_BASE_URL"] = "https://example.test"
+    assert 'rel="canonical" href="https://example.test/"' in Browser(app).get("/").get_data(as_text=True)
+
+
+def test_private_pages_are_noindex_and_robots_is_served(app, alice):
+    assert "noindex" in alice.get("/dashboard", follow_redirects=True).headers.get("X-Robots-Tag", "")
+    assert "noindex" in Browser(app).get("/login").headers.get("X-Robots-Tag", "")
+    assert 'name="robots" content="noindex' in Browser(app).get("/login").get_data(as_text=True)
+    robots = Browser(app).get("/robots.txt")
+    assert robots.status_code == 200 and "Disallow: /" in robots.get_data(as_text=True)
+    assert Browser(app).get("/favicon.ico").status_code == 200

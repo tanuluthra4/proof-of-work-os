@@ -18,12 +18,17 @@ class WorkflowEvent(Enum):
     REQUEST_EVIDENCE = "REQUEST_EVIDENCE"
     SUBMIT_EVIDENCE = "SUBMIT_EVIDENCE"
     START_VALIDATION = "START_VALIDATION"
-    APPROVE = "APPROVE"
-    REJECT = "REJECT"
+    VOTE_APPROVE = "VOTE_APPROVE"            # one reviewer approves (state unchanged)
+    VOTE_REJECT = "VOTE_REJECT"              # one reviewer rejects (state unchanged)
+    APPROVE = "APPROVE"                      # fired by the engine when the quorum is met
+    REJECT = "REJECT"                        # fired by the engine when approval is impossible
+    REASSIGN_REVIEWER = "REASSIGN_REVIEWER"  # owner swaps a reviewer who has not voted
+    WITHDRAW = "WITHDRAW"                    # owner withdraws a submission to change evidence
     RESTART = "RESTART"
 
 
 class Actor(Enum):
     """Who is allowed to fire an event."""
     OWNER = "OWNER"        # the developer who owns the task
-    REVIEWER = "REVIEWER"  # a reviewer who does NOT own the task
+    REVIEWER = "REVIEWER"  # a reviewer assigned to this submission (never its owner)
+    SYSTEM = "SYSTEM"      # fired only by the engine itself, from the votes

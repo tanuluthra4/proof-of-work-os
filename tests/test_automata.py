@@ -15,6 +15,12 @@ ALLOWED = [
     (S.IN_PROGRESS, E.REQUEST_EVIDENCE, S.EVIDENCE_REQUIRED),
     (S.EVIDENCE_REQUIRED, E.SUBMIT_EVIDENCE, S.EVIDENCE_SUBMITTED),
     (S.EVIDENCE_SUBMITTED, E.START_VALIDATION, S.VALIDATING),
+    (S.EVIDENCE_SUBMITTED, E.REASSIGN_REVIEWER, S.EVIDENCE_SUBMITTED),
+    (S.EVIDENCE_SUBMITTED, E.WITHDRAW, S.IN_PROGRESS),
+    (S.VALIDATING, E.VOTE_APPROVE, S.VALIDATING),
+    (S.VALIDATING, E.VOTE_REJECT, S.VALIDATING),
+    (S.VALIDATING, E.REASSIGN_REVIEWER, S.VALIDATING),
+    (S.VALIDATING, E.WITHDRAW, S.IN_PROGRESS),
     (S.VALIDATING, E.APPROVE, S.VERIFIED),
     (S.VALIDATING, E.REJECT, S.REJECTED),
     (S.REJECTED, E.RESTART, S.IN_PROGRESS),
@@ -75,9 +81,13 @@ def test_every_event_has_a_required_actor_and_is_used():
 
 
 def test_events_available_depend_on_role():
-    assert events_available_to(S.VALIDATING, is_owner=True, is_reviewer=False) == []
-    assert set(events_available_to(S.VALIDATING, is_owner=False, is_reviewer=True)) == {E.APPROVE, E.REJECT}
+    assert set(events_available_to(S.VALIDATING, is_owner=True, is_reviewer=False)) == {E.REASSIGN_REVIEWER, E.WITHDRAW}
+    assert set(events_available_to(S.VALIDATING, is_owner=False, is_reviewer=True)) == {E.VOTE_APPROVE, E.VOTE_REJECT}
+    # APPROVE / REJECT are fired by the quorum rule, never by a person
+    for owner, reviewer in ((True, False), (False, True), (True, True)):
+        assert not {E.APPROVE, E.REJECT} & set(events_available_to(S.VALIDATING, owner, reviewer))
     # an owner who is also a reviewer still cannot review their own work
-    assert events_available_to(S.VALIDATING, is_owner=True, is_reviewer=True) == []
+    assert not {E.VOTE_APPROVE, E.VOTE_REJECT} & set(events_available_to(S.VALIDATING, True, True))
     assert events_available_to(S.CREATED, is_owner=True, is_reviewer=False) == [E.START]
-    assert REQUIRED_ACTOR[E.APPROVE] is Actor.REVIEWER
+    assert REQUIRED_ACTOR[E.VOTE_APPROVE] is Actor.REVIEWER
+    assert REQUIRED_ACTOR[E.APPROVE] is Actor.SYSTEM

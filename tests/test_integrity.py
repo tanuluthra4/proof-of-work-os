@@ -13,7 +13,7 @@ def verified(app):
     alice, rev = make_user(app, "alice"), make_user(app, "rev", role="reviewer")
     task, wf = make_task(app, alice)
     advance_to_validating(app, wf, alice, rev)
-    fire(app, wf, E.APPROVE, rev, "Evidence checks out.")
+    fire(app, wf, E.VOTE_APPROVE, rev, "Evidence checks out.")
     return app, wf
 
 
@@ -25,7 +25,7 @@ def check(app, wf):
 def test_untouched_history_verifies(verified):
     app, wf = verified
     result = check(app, wf)
-    assert result["ok"] and result["length"] == 5 and result["replayed_state"] == "VERIFIED"
+    assert result["ok"] and result["length"] == 6 and result["replayed_state"] == "VERIFIED"
 
 
 def test_database_blocks_updates_and_direct_deletes(verified):
@@ -62,7 +62,7 @@ def test_deleted_middle_record_is_detected(verified):
 
 def test_truncated_tail_is_detected(verified):
     app, wf = verified
-    execute(app, "DELETE FROM state_transitions WHERE workflow_id = ? AND seq = 5", (wf,), drop_triggers=True)
+    execute(app, "DELETE FROM state_transitions WHERE workflow_id = ? AND seq = 6", (wf,), drop_triggers=True)
     assert check(app, wf)["error"]["code"] == "COUNT_MISMATCH"
 
 
@@ -104,4 +104,4 @@ def test_blocked_attempts_are_not_part_of_the_chain(verified):
     app, wf = verified
     with pytest.raises(Exception):
         fire(app, wf, E.START, 1)
-    assert check(app, wf)["length"] == 5
+    assert check(app, wf)["length"] == 6

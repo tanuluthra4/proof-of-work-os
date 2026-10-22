@@ -12,6 +12,12 @@ services:
         generateValue: true
       - key: REVIEWER_EMAILS
         sync: false          # set in the Render dashboard, e.g. you@example.com
+      - key: REVIEWER_INVITE_CODE
+        sync: false          # set ONLY in the dashboard; never commit it
+      - key: DEFAULT_REQUIRED_APPROVALS
+        value: "2"
+      - key: PUBLIC_BASE_URL
+        sync: false          # optional, e.g. https://proof-of-work-os.onrender.com
       # SQLite lives on the instance filesystem. On the free plan it is wiped on
       # every deploy/restart. For persistence attach a paid disk and uncomment:
       # - key: DATABASE_PATH

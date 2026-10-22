@@ -5,14 +5,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Proof-of-Work OS{% endblock %} | POW-OS</title>
+    {% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to main content</a>
 {% if current_user %}
 <header class="topbar">
     <div class="topbar-inner">
         <a class="brand" href="{{ url_for('main.home') }}">Proof<span>-of-Work</span> OS</a>
-        <nav class="nav">
+        <nav class="nav" aria-label="Main">
             {% if current_user['role'] == 'reviewer' %}
             <a href="{{ url_for('tasks.review_queue') }}" class="{{ 'active' if request.endpoint == 'tasks.review_queue' }}">Review requests</a>
             {% else %}
@@ -35,7 +38,7 @@
 {% endif %}
 
 {% block body %}
-<main class="container">
+<main class="container" id="main">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
     <div class="flash {{ category }}" role="status">{{ message }}</div>
@@ -44,6 +47,6 @@
     {% block content %}{% endblock %}
 </main>
 {% endblock %}
-<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
 </body>
 </html>
