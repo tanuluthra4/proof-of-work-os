@@ -18,5 +18,4 @@ def app(tmp_path):
         "TESTING": True,
         "DATABASE": str(tmp_path / "test.db"),
         "SECRET_KEY": "test-secret",
-        "REVIEWER_OPEN_SIGNUP": True,
     })

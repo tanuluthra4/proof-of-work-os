@@ -146,15 +146,12 @@
             <div class="notice warn small" style="margin-bottom:12px">Submitted evidence is <b>not</b> verified evidence. A skill is only proven when a reviewer approves and the workflow reaches VERIFIED.</div>
 
             {% if can_assign %}
-            <form method="post" action="{{ url_for('tasks.choose_reviewer', task_id=task['id']) }}" style="margin-bottom:18px">
-                {{ csrf() }}
-                <label for="reviewers">Reviewers (one username or e-mail per line, up to 5)</label>
-                <textarea id="reviewers" name="reviewers" required placeholder="reviewer one&#10;reviewer two">{% for r in active_reviewers %}{{ r['username'] }}{{ '\n' if not loop.last }}{% endfor %}</textarea>
-                <label for="required">Approvals required</label>
-                <input id="required" type="number" name="required" min="1" max="5" value="{{ task['required_approvals'] if active_reviewers else default_required }}" required>
-                <p class="hint">Reviewers must be distinct reviewer accounts other than you. Common policies: 1 of 1, 2 of 2, 2 of 3. The submission is verified once that many approve, and rejected as soon as the required number can no longer be reached. Reviewer accounts are invitation-only, but their identity and expertise are not independently verified.</p>
-                <button type="submit" class="btn-ghost">{{ 'Update reviewers' if active_reviewers else 'Set reviewers' }}</button>
-            </form>
+            <div style="margin-bottom:18px">
+                <h3>Reviewers</h3>
+                {% if active_reviewers %}<p class="small">Chosen: {% for r in active_reviewers %}<b>{{ r['username'] }}</b>{{ ', ' if not loop.last }}{% endfor %} &mdash; {{ task['required_approvals'] }} of {{ active_reviewers|length }} must approve.</p>{% endif %}
+                <p class="hint">Pick reviewers from the directory by name, skill or experience. Their profiles are self-reported; selecting someone does not guarantee approval.</p>
+                <a class="btn btn-primary btn-sm" href="{{ url_for('reviewers.picker', task_id=task['id']) }}">{{ 'Change reviewers' if active_reviewers else 'Choose reviewers' }}</a>
+            </div>
             {% endif %}
 
             {% if can_add_evidence %}

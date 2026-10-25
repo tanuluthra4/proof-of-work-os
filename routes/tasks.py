@@ -2,7 +2,7 @@ import re
 import secrets
 from collections import OrderedDict
 
-from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, session, url_for
 
 from automata.states import WorkflowEvent, WorkflowState
 from automata.transitions import events_available_to, get_allowed_events
@@ -21,6 +21,7 @@ from services.evidence_service import (
 )
 from services.fsm_view import EVENT_LABELS, STATE_LABELS, build_fsm_view
 from services.review_service import review_panel, tally
+from services.reviewer_profiles import ProfileError, selectable_reviewers
 
 tasks_bp = Blueprint("tasks", __name__)
 engine = AutomataEngine()
@@ -418,18 +419,27 @@ def remove_evidence_item(task_id, evidence_id):
 @tasks_bp.route("/tasks/<int:task_id>/reviewer", methods=["POST"])
 @developer_required
 def choose_reviewer(task_id):
+    """Save the chosen reviewers. Ids come from the directory picker and are re-validated
+    against the database here: real reviewer accounts, listed, distinct, never the owner."""
     conn = get_db_connection()
     try:
         task = _owned_task_or_404(conn, task_id)
         try:
+            chosen = selectable_reviewers(conn, request.form.getlist("reviewer_ids"), g.user["id"])
             names, required = assign_reviewers(
                 conn, task["workflow_id"], g.user["id"],
-                request.form.get("reviewers"), request.form.get("required"),
+                [username for _, username, _ in chosen], request.form.get("required"),
             )
+            session.pop(f"pick:{task_id}", None)
             flash(f"Evidence will be sent to {', '.join(names)}; "
-                  f"{required} of {len(names)} must approve.", "success")
+                  f"{required} of {len(names)} must approve. Selecting reviewers does not guarantee approval.",
+                  "success")
+        except ProfileError as error:
+            flash_errors(error.problems)
+            return redirect(url_for("reviewers.picker", task_id=task_id))
         except EvidenceError as error:
             flash_errors(error.problems)
+            return redirect(url_for("reviewers.picker", task_id=task_id))
         except EvidenceNotAllowed as error:
             flash(str(error), "error")
     finally:

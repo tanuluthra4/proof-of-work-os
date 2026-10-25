@@ -10,6 +10,7 @@ class Browser:
     """A test client that automatically attaches the session's CSRF token."""
 
     def __init__(self, app):
+        self.app = app
         self.client = app.test_client()
 
     def token(self):
@@ -38,6 +39,31 @@ class Browser:
         return self.post("/login", {"email": email, "password": password})
 
 
+def list_profile(app, username, skills=("python",), expertise=(), visibility="listed", level="mid"):
+    """Give a reviewer a listed profile directly in the test database."""
+    uid = query(app, "SELECT id FROM users WHERE username = ?", (username,))[0][0]
+    execute(app, "UPDATE profiles SET profile_visibility = ?, experience_level = ? WHERE user_id = ?",
+            (visibility, level, uid))
+    for kind, tags in (("skill", skills), ("expertise", expertise)):
+        for t in tags:
+            execute(app, "INSERT OR IGNORE INTO reviewer_tags (user_id, kind, tag, label) VALUES (?, ?, ?, ?)",
+                    (uid, kind, t.lower(), t))
+    return uid
+
+
+def reviewer_ids(app, names):
+    out = []
+    for n in names:
+        rows = query(app, "SELECT id FROM users WHERE username = ? OR email = ?", (n, n))
+        out.append(str(rows[0][0]) if rows else "999999")
+    return out
+
+
+def choose(browser, app, task_id, names, required=1, **kw):
+    return browser.post(f"/tasks/{task_id}/reviewer",
+                        {"reviewer_ids": reviewer_ids(app, names), "required": str(required)}, **kw)
+
+
 @pytest.fixture
 def alice(app):
     b = Browser(app)
@@ -56,6 +82,7 @@ def bob(app):
 def reviewer(app):
     b = Browser(app)
     assert b.signup("rev", "rev@example.com", role="reviewer").status_code == 302
+    list_profile(app, "rev")
     return b
 
 
@@ -269,10 +296,9 @@ def test_full_workflow_end_to_end(app, alice, reviewer):
     # evidence is complete but no reviewer was chosen yet -> refused
     assert "Choose the reviewers" in fire(alice, task_id, "SUBMIT_EVIDENCE").get_data(as_text=True)
     assert state(app, task_id) == "EVIDENCE_REQUIRED"
-    unknown = alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "nobody", "required": "1"},
-                         follow_redirects=True)
-    assert "No reviewer account matches" in unknown.get_data(as_text=True)
-    alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "REV@example.com", "required": "1"})
+    unknown = choose(alice, app, task_id, ["nobody"], follow_redirects=True)
+    assert "not available in the directory" in unknown.get_data(as_text=True)
+    choose(alice, app, task_id, ["rev"])
     fire(alice, task_id, "SUBMIT_EVIDENCE")
     assert state(app, task_id) == "EVIDENCE_SUBMITTED"
 
@@ -407,36 +433,26 @@ def test_signup_creates_the_chosen_role_and_lands_on_the_right_home(app):
     assert Browser(app).get("/signup?role=admin").status_code == 400
 
 
-def test_reviewer_signup_is_invitation_only(app):
-    app.config["REVIEWER_OPEN_SIGNUP"] = False
-    app.config["REVIEWER_EMAILS"] = frozenset({"rev@example.com"})
-    app.config["REVIEWER_INVITE_CODE"] = "s3cret-code"
-    stranger = Browser(app)
-    response = stranger.signup("stranger", role="reviewer")
-    html = response.get_data(as_text=True)
-    assert response.status_code == 200 and "invitation-only" in html
-    assert "s3cret-code" not in html                        # the code is never echoed
-    assert query(app, "SELECT COUNT(*) FROM users")[0][0] == 0
-    # wrong code is refused, without revealing the right one
-    bad = Browser(app)
-    r = bad.post("/signup", {"username": "badguy", "email": "bad@example.com", "password": "correct-horse",
-                             "role": "reviewer", "invite_code": "guess"})
-    assert r.status_code == 200 and "s3cret-code" not in r.get_data(as_text=True)
-    # allowlisted e-mail works, and so does the correct code
-    assert Browser(app).signup("rev", "rev@example.com", role="reviewer").status_code == 302
-    good = Browser(app)
-    assert good.post("/signup", {"username": "coded", "email": "coded@example.com", "password": "correct-horse",
-                                 "role": "reviewer", "invite_code": "s3cret-code"}).status_code == 302
-    # a developer account is never blocked by the reviewer rules
-    assert Browser(app).signup("dev1", role="developer").status_code == 302
-
-
-def test_invite_code_field_only_shown_when_required(app):
-    app.config["REVIEWER_OPEN_SIGNUP"] = False
-    app.config["REVIEWER_INVITE_CODE"] = "s3cret-code"
+def test_reviewer_signup_is_open_without_invite_or_allowlist(app):
     html = Browser(app).get("/signup?role=reviewer").get_data(as_text=True)
-    assert 'name="invite_code"' in html and "s3cret-code" not in html
-    assert 'name="invite_code"' not in Browser(app).get("/signup?role=developer").get_data(as_text=True)
+    assert "invite" not in html.lower() and 'name="invite_code"' not in html
+    for name in ("openrev", "another"):
+        assert Browser(app).signup(name, role="reviewer").status_code == 302
+    assert [r[0] for r in query(app, "SELECT role FROM users ORDER BY id")] == ["reviewer", "reviewer"]
+    # the old configuration keys no longer exist
+    for key in ("REVIEWER_EMAILS", "REVIEWER_INVITE_CODE", "REVIEWER_OPEN_SIGNUP"):
+        assert key not in app.config
+
+
+def test_signup_cannot_forge_other_roles(app):
+    b = Browser(app)
+    assert b.post("/signup", {"username": "mallory", "email": "m@example.com", "password": "correct-horse",
+                              "role": "admin"}).status_code == 400
+    assert query(app, "SELECT COUNT(*) FROM users")[0][0] == 0
+    # extra form fields cannot smuggle a role either
+    b.post("/signup?role=developer", {"username": "mallory", "email": "m@example.com", "password": "correct-horse",
+                                      "is_admin": "1", "user_role": "reviewer"})
+    assert query(app, "SELECT role FROM users")[0][0] == "developer"
 
 
 def test_roles_are_separate_areas(app, alice, reviewer):
@@ -455,7 +471,7 @@ def submit_for(browser, task_id, reviewer_name, required=1):
     fire(browser, task_id, "REQUEST_EVIDENCE")
     browser.post(f"/tasks/{task_id}/evidence", {"evidence_type": "github_repo",
                                                 "evidence_url": "https://github.com/octocat/hello"})
-    browser.post(f"/tasks/{task_id}/reviewer", {"reviewers": reviewer_name, "required": str(required)})
+    choose(browser, browser.app, task_id, reviewer_name.split("\n"), required)
     fire(browser, task_id, "SUBMIT_EVIDENCE")
 
 
@@ -477,15 +493,14 @@ def test_reviewer_only_sees_evidence_sent_to_them(app, alice, reviewer):
 def test_reviewer_choice_rules(app, alice, bob, reviewer):
     task_id = create_task(alice)
     fire(alice, task_id, "START")
-    assert "preparing evidence" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"},
-                                              follow_redirects=True).get_data(as_text=True)
+    assert "preparing evidence" in choose(alice, app, task_id, ["rev"], follow_redirects=True).get_data(as_text=True)
     fire(alice, task_id, "REQUEST_EVIDENCE")
     # a developer account is not a valid reviewer
-    assert "No reviewer account" in alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "bob", "required": "1"},
-                                               follow_redirects=True).get_data(as_text=True)
+    assert "not available in the directory" in choose(alice, app, task_id, ["bob"],
+                                                       follow_redirects=True).get_data(as_text=True)
     # nobody else can assign on alice's task
-    assert bob.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"}).status_code == 404
-    alice.post(f"/tasks/{task_id}/reviewer", {"reviewers": "rev", "required": "1"})
+    assert choose(bob, app, task_id, ["rev"]).status_code == 404
+    choose(alice, app, task_id, ["rev"])
     assert query(app, "SELECT COUNT(*) FROM review_assignments")[0][0] == 1
 
 
@@ -558,6 +573,7 @@ def trio(app):
     for n in ("rev_a", "rev_b", "rev_c"):
         b = Browser(app)
         assert b.signup(n, role="reviewer").status_code == 302
+        list_profile(app, n)
         names[n] = b
     return names
 

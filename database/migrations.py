@@ -275,10 +275,59 @@ def _migration_3(conn):
     )
 
 
+def _migration_4(conn):
+    """Reviewer profiles and discovery. Additive only: nothing is dropped or rewritten.
+
+    The existing `profiles` table is reused (full_name = display name, headline,
+    bio, portfolio_url, linkedin_url, profile_visibility). New nullable/defaulted
+    columns hold the self-reported details and which optional parts are public.
+    `profile_visibility` is 'private' (default, only the owner), 'unlisted'
+    (public page by link, not in the directory) or 'listed' (directory + page).
+    Skills and expertise areas live in `reviewer_tags` so they can be filtered in SQL.
+    """
+    for definition in (
+        "experience_level TEXT",
+        "work_history TEXT",
+        "education TEXT",
+        "github_url TEXT",
+        "pub_bio INTEGER NOT NULL DEFAULT 1",
+        "pub_experience INTEGER NOT NULL DEFAULT 1",
+        "pub_work INTEGER NOT NULL DEFAULT 1",
+        "pub_education INTEGER NOT NULL DEFAULT 1",
+        "pub_links INTEGER NOT NULL DEFAULT 1",
+        "updated_at TIMESTAMP",
+    ):
+        _add_column(conn, "profiles", definition)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reviewer_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('skill', 'expertise')),
+            tag TEXT NOT NULL,
+            label TEXT NOT NULL,
+            UNIQUE (user_id, kind, tag)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reviewer_tags_lookup ON reviewer_tags(kind, tag, user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_user ON profiles(user_id)")
+    # Every reviewer gets a (private) profile row so the editor always has one.
+    conn.execute(
+        """
+        INSERT INTO profiles (user_id, full_name, profile_visibility)
+        SELECT u.id, u.username, 'private' FROM users u
+        WHERE u.role = 'reviewer' AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.user_id = u.id)
+        """
+    )
+
+
 MIGRATIONS = [
     (1, _migration_1),
     (2, _migration_2),
     (3, _migration_3),
+    (4, _migration_4),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

@@ -13,6 +13,7 @@ from routes.helpers import check_csrf, csrf_token, load_current_user
 from routes.main import main_bp
 from routes.projects import projects_bp
 from routes.public import public_bp
+from routes.reviewers import reviewers_bp
 from routes.tasks import tasks_bp
 
 log = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def create_app(test_config=None):
         app.config["SECRET_KEY"] = secrets.token_hex(32)
         log.warning("SECRET_KEY is not set; using a temporary random key.")
 
-    for blueprint in (main_bp, auth_bp, projects_bp, tasks_bp, public_bp):
+    for blueprint in (main_bp, auth_bp, projects_bp, tasks_bp, public_bp, reviewers_bp):
         app.register_blueprint(blueprint)
 
     app.before_request(load_current_user)

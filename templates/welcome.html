@@ -18,7 +18,7 @@
         <span class="brand-mark" aria-hidden="true">P</span>
         <p class="eyebrow">PROOF-OF-WORK OS</p>
         <h1>Make your work <span>provable.</span></h1>
-        <p class="welcome-copy">A structured way to submit developer evidence, review it, and record trustworthy verification decisions.</p>
+        <p class="welcome-copy">A structured way to submit developer evidence, review it, and record trustworthy verification decisions. Join as a Developer or as a Reviewer.</p>
     </div>
 
     <section class="role-grid" aria-label="Choose how to sign in">
@@ -35,9 +35,9 @@
             <div class="role-icon" aria-hidden="true">✓</div>
             <p class="eyebrow">EXAMINE &amp; VERIFY</p>
             <h2>I'm a Reviewer</h2>
-            <p>Verify evidence that developers send to you, and record an approval or rejection with a reason.</p>
+            <p>Open to everyone. Create a reviewer profile, get found by developers, and record an approval or rejection with a reason on the evidence assigned to you.</p>
             <a class="btn btn-block" href="{{ url_for('auth.login', role='reviewer') }}">Continue as Reviewer <span aria-hidden="true">→</span></a>
-            <p class="role-footnote">New reviewer? <a href="{{ url_for('auth.signup', role='reviewer') }}">Create a reviewer account</a>.</p>
+            <p class="role-footnote">Anyone can join as a reviewer. <a href="{{ url_for('auth.signup', role='reviewer') }}">Create a reviewer account</a>.</p>
         </article>
     </section>
 
@@ -62,8 +62,9 @@
 
 <section class="info-section faq" id="faq" aria-labelledby="faq-h">
     <h2 id="faq-h">FAQ</h2>
+    <details><summary>Who can be a reviewer?</summary><p>Anyone can create a reviewer account and a profile. Skills, experience and links on a profile are self-reported; the platform verifies none of them. Developers choose their reviewers from a searchable directory.</p></details>
     <details><summary>Does &ldquo;verified&rdquo; mean an organisation certified the developer?</summary><p>No. It means the named reviewer accounts approved the submitted evidence. Reviewer identity and expertise are not independently verified, and several reviewers are not an organisation.</p></details>
-    <details><summary>Can a developer approve their own work?</summary><p>No. Reviewers must be other reviewer accounts, and reviewer sign-up is invitation-only.</p></details>
+    <details><summary>Can a developer approve their own work?</summary><p>No. Reviewers must be other reviewer accounts, and the server refuses to assign you to your own work. Because anyone can register as a reviewer, check each reviewer&rsquo;s self-reported profile and links before choosing them.</p></details>
     <details><summary>Who can see my proof?</summary><p>Only you and your assigned reviewers, unless you create a public link. Public pages show reviewer usernames, decisions and notes the reviewer marked public, never e-mails or private notes.</p></details>
     <details><summary>What if I change my evidence after submitting?</summary><p>Withdraw the submission. A new round starts and earlier approvals no longer count, but they stay in the history.</p></details>
     <details><summary>Is the audit trail tamper-proof?</summary><p>No, it is tamper-evident. Anyone with database access could rewrite it and its hashes together; the check detects ordinary edits and inconsistencies.</p></details>

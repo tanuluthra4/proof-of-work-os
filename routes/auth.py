@@ -1,7 +1,6 @@
-import hmac
 import sqlite3
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database.db import get_db_connection, transaction
@@ -33,23 +32,12 @@ def signup():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
 
-        invite = (request.form.get("invite_code") or "").strip()
-        cfg = current_app.config
-        reviewer_allowed = bool(
-            cfg["REVIEWER_OPEN_SIGNUP"]
-            or email in cfg["REVIEWER_EMAILS"]
-            or (cfg["REVIEWER_INVITE_CODE"]
-                and hmac.compare_digest(invite.encode(), cfg["REVIEWER_INVITE_CODE"].encode()))
-        )
-
         if not valid_username(username):
             error = "Username must be 3-30 characters: letters, numbers, '.', '_' or '-'."
         elif not valid_email(email):
             error = "Enter a valid email address."
         elif not (8 <= len(password) <= 128):
             error = "Password must be between 8 and 128 characters."
-        elif selected_role == "reviewer" and not reviewer_allowed:
-            error = "Reviewer accounts are invitation-only. Ask the project owner for an invitation."
         else:
             try:
                 with transaction() as conn:
@@ -77,12 +65,7 @@ def signup():
                     start_session({"id": user_id, "username": username})
                     return redirect(_home_for(selected_role))
 
-    return render_template(
-        "signup.html", error=error, selected_role=selected_role,
-        invite_required=(selected_role == "reviewer"
-                         and not current_app.config["REVIEWER_OPEN_SIGNUP"]
-                         and bool(current_app.config["REVIEWER_INVITE_CODE"])),
-    )
+    return render_template("signup.html", error=error, selected_role=selected_role)
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])

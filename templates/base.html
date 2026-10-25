@@ -18,9 +18,11 @@
         <nav class="nav" aria-label="Main">
             {% if current_user['role'] == 'reviewer' %}
             <a href="{{ url_for('tasks.review_queue') }}" class="{{ 'active' if request.endpoint == 'tasks.review_queue' }}">Review requests</a>
+            <a href="{{ url_for('reviewers.edit_profile') }}" class="{{ 'active' if request.endpoint == 'reviewers.edit_profile' }}">My profile</a>
             {% else %}
             <a href="{{ url_for('main.dashboard') }}" class="{{ 'active' if request.endpoint == 'main.dashboard' }}">Dashboard</a>
             <a href="{{ url_for('projects.projects') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('projects.') }}">Projects</a>
+ <a href="{{ url_for('reviewers.directory') }}" class="{{ 'active' if request.endpoint == 'reviewers.directory' }}">Find reviewers</a>
             <a href="{{ url_for('tasks.add_task') }}" class="{{ 'active' if request.endpoint == 'tasks.add_task' }}">+ New task</a>
             <a href="{{ url_for('public.profile', username=current_user['username']) }}">My public profile</a>
             {% endif %}

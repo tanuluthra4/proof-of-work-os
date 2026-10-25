@@ -268,3 +268,19 @@ table.queue { width: 100%; border-collapse: collapse; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 .hash, .evidence-item a, .evidence-item p, .reason { overflow-wrap: anywhere; word-break: break-word; }
 .kv { flex-wrap: wrap; }
+
+/* --- reviewer directory & picker --- */
+.reviewer-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.reviewer-card h3 { margin-bottom: 4px; }
+.reviewer-card form { margin-top: 8px; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.filter-form .btn { margin-left: 8px; }
+.pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin: 16px 0; }
+.trust-note { margin: 8px 0 14px; }
+.prewrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.inline-form input { width: auto; margin: 0; }
+fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
+legend { padding: 0 6px; font-weight: 600; }
+progress { width: 100%; height: 12px; }
+.pill.ok { background: var(--good-soft); color: var(--good); }
